@@ -60,6 +60,7 @@ void registerOrUpdateNode(String id, NodeRole type, String status, int rssi);
 String getSystemStatusJson();
 void sendLoRaMessage(const String& message);
 void Task_LoRa_Handler(void *pvParameters);
+void Task_Node_Janitor(void *pvParameters);
 
 
 void setup() {
@@ -167,6 +168,7 @@ void startStaMode() {
 
     // Démarrer la tâche de traitement LoRa
     xTaskCreate(Task_LoRa_Handler, "LoRa Handler", 4096, NULL, 3, NULL);
+    xTaskCreate(Task_Node_Janitor, "Node Janitor", 2048, NULL, 1, NULL);
 
     // --- Serveur Web ---
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(LittleFS, "/index.html", "text/html"); });
@@ -178,6 +180,7 @@ void startStaMode() {
         if (request->hasParam("well", true)) wellId = request->getParam("well", true)->value();
 
         if (reservoirId.length() > 0 && wellId.length() > 0) {
+            // 1. Envoyer la commande de configuration
             StaticJsonDocument<256> doc;
             doc["type"] = MessageType::COMMAND;
             doc["tgt"] = reservoirId;
@@ -186,7 +189,21 @@ void startStaMode() {
             String packet;
             serializeJson(doc, packet);
             sendLoRaMessage(packet);
-            request->send(200, "text/plain", "Assignation command sent to " + reservoirId);
+
+            // 2. Mettre à jour l'état local dans la centrale
+            if (xSemaphoreTake(nodeListMutex, portMAX_DELAY) == pdTRUE) {
+                for (int i = 0; i < nodeCount; i++) {
+                    if (nodeList[i].id.equals(reservoirId)) {
+                        nodeList[i].assignedTo = wellId;
+                    }
+                    if (nodeList[i].id.equals(wellId)) {
+                        nodeList[i].assignedTo = reservoirId;
+                    }
+                }
+                xSemaphoreGive(nodeListMutex);
+            }
+
+            request->send(200, "text/plain", "Assignation command sent and saved for " + reservoirId);
         } else {
             request->send(400, "text/plain", "Missing parameters.");
         }
@@ -319,6 +336,7 @@ String getSystemStatusJson() {
             node["rssi"] = nodeList[i].rssi;
             node["status"] = nodeList[i].status;
             node["lastSeen"] = nodeList[i].lastSeen;
+            node["assignedTo"] = nodeList[i].assignedTo;
         }
         serializeJson(doc, output);
         xSemaphoreGive(nodeListMutex);
@@ -327,4 +345,26 @@ String getSystemStatusJson() {
         output = "{\"error\":\"Could not access node list\"}";
     }
     return output;
+}
+
+void Task_Node_Janitor(void *pvParameters) {
+    const long NODE_TIMEOUT_MS = 300000; // 5 minutes
+    const TickType_t TASK_INTERVAL_TICKS = pdMS_TO_TICKS(30000); // 30 secondes
+
+    for (;;) {
+        vTaskDelay(TASK_INTERVAL_TICKS);
+
+        if (xSemaphoreTake(nodeListMutex, portMAX_DELAY) == pdTRUE) {
+            unsigned long currentTime = millis();
+            bool changed = false;
+            for (int i = 0; i < nodeCount; i++) {
+                if (nodeList[i].status != "DISCONNECTED" && (currentTime - nodeList[i].lastSeen > NODE_TIMEOUT_MS)) {
+                    nodeList[i].status = "DISCONNECTED";
+                    changed = true;
+                    Serial.printf("Node %s timed out. Marked as DISCONNECTED.\n", nodeList[i].id.c_str());
+                }
+            }
+            xSemaphoreGive(nodeListMutex);
+        }
+    }
 }
