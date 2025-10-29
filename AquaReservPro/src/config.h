@@ -13,6 +13,10 @@
 #define PRE_SHARED_KEY "HydroControl-GE-Super-Secret-Key-2025"
 #define SENSOR_STABILITY_MS 5000 // 5 secondes de stabilité requise
 
+// --- Configuration du point d'accès initial ---
+#define AP_SSID "AquaReservPro-Setup"
+#define AP_PASSWORD "config1234"
+
 // --- Clés pour le stockage non-volatile ---
 #define PREF_KEY_MODE "opMode"
 #define PREF_KEY_WELL_ID "assignedWell"

@@ -5,13 +5,14 @@
 #include <WiFi.h>
 #include <ESPAsyncWebServer.h>
 #include <Preferences.h>
-#include "LITTLEFS.h"
+#include "LittleFS.h"
 #include "config.h"
 #include "Message.h"
 #include "Crypto.h"
 
 // --- FreeRTOS Handles ---
 QueueHandle_t loraRxQueue;
+SemaphoreHandle_t nodeListMutex;
 #define LORA_RX_QUEUE_SIZE 10
 #define LORA_RX_PACKET_MAX_LEN 256
 
@@ -65,6 +66,7 @@ void setup() {
     Serial.begin(115200);
 
     loraRxQueue = xQueueCreate(LORA_RX_QUEUE_SIZE, sizeof(char[LORA_RX_PACKET_MAX_LEN]));
+    nodeListMutex = xSemaphoreCreateMutex();
 
     if (loadConfiguration()) startStaMode();
     else startApMode();
@@ -152,7 +154,7 @@ void startStaMode() {
     while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
     Serial.println("\nWiFi Connected. IP: " + WiFi.localIP().toString());
 
-    if(!LITTLEFS.begin(true)) { Serial.println("LITTLEFS Mount Failed"); return; }
+    if(!LittleFS.begin(true)) { Serial.println("LittleFS Mount Failed"); return; }
 
     SPI.begin();
     LoRa.setPins(LORA_SS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
@@ -167,9 +169,9 @@ void startStaMode() {
     xTaskCreate(Task_LoRa_Handler, "LoRa Handler", 4096, NULL, 3, NULL);
 
     // --- Serveur Web ---
-    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(LITTLEFS, "/index.html", "text/html"); });
-    server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(LITTLEFS, "/style.css", "text/css"); });
-    server.on("/script.js", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(LITTLEFS, "/script.js", "application/javascript"); });
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(LittleFS, "/index.html", "text/html"); });
+    server.on("/style.css", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(LittleFS, "/style.css", "text/css"); });
+    server.on("/script.js", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(LittleFS, "/script.js", "application/javascript"); });
     server.on("/api/assign", HTTP_POST, [](AsyncWebServerRequest *request) {
         String reservoirId, wellId;
         if (request->hasParam("reservoir", true)) reservoirId = request->getParam("reservoir", true)->value();
@@ -265,29 +267,31 @@ void handleLoRaPacket(String packet, int rssi) {
     }
 }
 void registerOrUpdateNode(String id, NodeRole role, String status, int rssi) {
-    // ... (même logique que précédemment)
-     int existingNodeIndex = -1;
-    for (int i = 0; i < nodeCount; i++) {
-        if (nodeList[i].id.equals(id)) {
-            existingNodeIndex = i;
-            break;
+    if (xSemaphoreTake(nodeListMutex, portMAX_DELAY) == pdTRUE) {
+        int existingNodeIndex = -1;
+        for (int i = 0; i < nodeCount; i++) {
+            if (nodeList[i].id.equals(id)) {
+                existingNodeIndex = i;
+                break;
+            }
         }
-    }
 
-    if (existingNodeIndex != -1) { // Mise à jour
-        nodeList[existingNodeIndex].lastSeen = millis();
-        nodeList[existingNodeIndex].rssi = rssi;
-        nodeList[existingNodeIndex].status = status;
-        if (role != ROLE_UNKNOWN) { // Mettre à jour le rôle si fourni
-            nodeList[existingNodeIndex].type = role;
+        if (existingNodeIndex != -1) { // Mise à jour
+            nodeList[existingNodeIndex].lastSeen = millis();
+            nodeList[existingNodeIndex].rssi = rssi;
+            nodeList[existingNodeIndex].status = status;
+            if (role != ROLE_UNKNOWN) { // Mettre à jour le rôle si fourni
+                nodeList[existingNodeIndex].type = role;
+            }
+        } else if (nodeCount < MAX_NODES) { // Nouveau noeud
+            nodeList[nodeCount].id = id;
+            nodeList[nodeCount].type = role;
+            nodeList[nodeCount].lastSeen = millis();
+            nodeList[nodeCount].rssi = rssi;
+            nodeList[nodeCount].status = status;
+            nodeCount++;
         }
-    } else if (nodeCount < MAX_NODES) { // Nouveau noeud
-        nodeList[nodeCount].id = id;
-        nodeList[nodeCount].type = role;
-        nodeList[nodeCount].lastSeen = millis();
-        nodeList[nodeCount].rssi = rssi;
-        nodeList[nodeCount].status = status;
-        nodeCount++;
+        xSemaphoreGive(nodeListMutex);
     }
 }
 void sendLoRaMessage(const String& message) {
@@ -298,25 +302,29 @@ void sendLoRaMessage(const String& message) {
     Serial.printf("Sent LoRa: %s\n", message.c_str());
 }
 String getSystemStatusJson() {
-    // ... (même logique que précédemment)
-        StaticJsonDocument<1024> doc;
-    doc["nodeCount"] = nodeCount;
-    JsonArray nodes = doc.createNestedArray("nodes");
-
-    for (int i = 0; i < nodeCount; i++) {
-        JsonObject node = nodes.createNestedObject();
-        node["id"] = nodeList[i].id;
-        switch(nodeList[i].type) {
-            case ROLE_AQUA_RESERV_PRO: node["type"] = "AquaReservPro"; break;
-            case ROLE_WELLGUARD_PRO: node["type"] = "WellguardPro"; break;
-            default: node["type"] = "Unknown"; break;
-        }
-        node["rssi"] = nodeList[i].rssi;
-        node["status"] = nodeList[i].status;
-        node["lastSeen"] = nodeList[i].lastSeen;
-    }
-
     String output;
-    serializeJson(doc, output);
+    if (xSemaphoreTake(nodeListMutex, pdMS_TO_TICKS(1000)) == pdTRUE) {
+        StaticJsonDocument<1024> doc;
+        doc["nodeCount"] = nodeCount;
+        JsonArray nodes = doc.createNestedArray("nodes");
+
+        for (int i = 0; i < nodeCount; i++) {
+            JsonObject node = nodes.createNestedObject();
+            node["id"] = nodeList[i].id;
+            switch(nodeList[i].type) {
+                case ROLE_AQUA_RESERV_PRO: node["type"] = "AquaReservPro"; break;
+                case ROLE_WELLGUARD_PRO: node["type"] = "WellguardPro"; break;
+                default: node["type"] = "Unknown"; break;
+            }
+            node["rssi"] = nodeList[i].rssi;
+            node["status"] = nodeList[i].status;
+            node["lastSeen"] = nodeList[i].lastSeen;
+        }
+        serializeJson(doc, output);
+        xSemaphoreGive(nodeListMutex);
+    } else {
+        // Could not take mutex, return an empty JSON object or an error message
+        output = "{\"error\":\"Could not access node list\"}";
+    }
     return output;
 }

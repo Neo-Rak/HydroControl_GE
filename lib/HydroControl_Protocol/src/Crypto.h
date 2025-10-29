@@ -1,7 +1,7 @@
 #pragma once
 
+#include <Arduino.h>
 #include <AESLib.h>
-#include <String>
 
 // --- Paramètres de Chiffrement ---
 // L'IV (Vecteur d'Initialisation) doit être partagé entre les modules, tout comme la clé.
