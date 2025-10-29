@@ -17,6 +17,8 @@
 #define PREF_KEY_LORA_KEY  "lora_key"
 #define PREF_NAMESPACE     "hydro_cfg"
 
+#define HEARTBEAT_INTERVAL_MS 120000 // 2 minutes
+
 // --- Structure de Configuration ---
 struct SystemConfig {
     String wifi_ssid;
@@ -32,6 +34,7 @@ AsyncWebServer server(80);
 String deviceId;
 volatile bool relayState = false;
 volatile long lastCommandRssi = 0;
+volatile unsigned long lastLoRaTransmissionTimestamp = 0;
 
 // Prototypes
 void startApMode();
@@ -41,6 +44,33 @@ void onReceive(int packetSize);
 void handleLoRaPacket(const String& packet);
 void sendLoRaMessage(const String& message);
 void setRelayState(bool newState);
+
+void Task_Status_Reporter(void *pvParameters) {
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS));
+
+        if (millis() - lastLoRaTransmissionTimestamp < HEARTBEAT_INTERVAL_MS) {
+            continue;
+        }
+
+        StaticJsonDocument<256> doc;
+        doc["type"] = "STATUS_UPDATE";
+        doc["sourceId"] = deviceId;
+        doc["relayState"] = relayState ? "ON" : "OFF";
+        doc["rssi"] = lastCommandRssi;
+
+        String packet;
+        serializeJson(doc, packet);
+        String encryptedPacket = CryptoManager::encrypt(packet, currentConfig.lora_key);
+
+        LoRa.beginPacket();
+        LoRa.print(encryptedPacket);
+        LoRa.endPacket();
+
+        lastLoRaTransmissionTimestamp = millis();
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     pinMode(RELAY_PIN, OUTPUT);
@@ -118,6 +148,8 @@ void startStaMode() {
     LoRa.onReceive(onReceive);
     LoRa.receive();
 
+    xTaskCreate(Task_Status_Reporter, "Status Reporter", 2048, NULL, 1, NULL);
+
     // --- Serveur Web ---
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(LittleFS, "/index.html", "text/html");
@@ -160,6 +192,7 @@ void handleLoRaPacket(const String& packet) {
         String sourceId = doc["src"];
         String ackPacket = LoRaMessage::serializeCommandAck(deviceId.c_str(), sourceId.c_str(), true);
         sendLoRaMessage(ackPacket);
+        lastLoRaTransmissionTimestamp = millis();
     }
 }
 

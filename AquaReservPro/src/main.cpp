@@ -20,6 +20,8 @@ SemaphoreHandle_t ackSemaphore;
 #define PREF_KEY_LORA_KEY  "lora_key"
 #define PREF_NAMESPACE     "hydro_cfg"
 
+#define HEARTBEAT_INTERVAL_MS 120000 // 2 minutes
+
 // --- Structure de Configuration ---
 struct SystemConfig {
     String wifi_ssid;
@@ -37,6 +39,7 @@ String assignedWellId = "";
 OperatingMode currentMode = AUTO;
 LevelState currentLevel = LEVEL_UNKNOWN;
 bool currentPumpCommand = false;
+volatile unsigned long lastLoRaTransmissionTimestamp = 0;
 
 
 // Prototypes
@@ -51,6 +54,43 @@ void Task_GPIO_Handler(void *pvParameters);
 void sendLoRaMessage(const String& message);
 bool sendReliableCommand(const String& packet);
 void triggerPumpCommand(bool command);
+
+void Task_Status_Reporter(void *pvParameters) {
+    for (;;) {
+        // 1. Dormir pendant l'intervalle nominal du heartbeat
+        vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS));
+
+        // 2. Vérifier si une communication a déjà eu lieu récemment
+        unsigned long elapsedTime = millis() - lastLoRaTransmissionTimestamp;
+        if (elapsedTime < HEARTBEAT_INTERVAL_MS) {
+            // Un message critique a été envoyé il y a moins de 2 minutes.
+            // Le heartbeat est inutile. On saute ce cycle.
+            continue;
+        }
+
+        // 3. Si le module a été silencieux, envoyer le statut complet
+        StaticJsonDocument<256> doc;
+        doc["type"] = "STATUS_UPDATE";
+        doc["sourceId"] = deviceId;
+        doc["level"] = (currentLevel == LEVEL_FULL) ? "FULL" : "EMPTY";
+        doc["mode"] = (currentMode == AUTO) ? "AUTO" : "MANUAL";
+        doc["pump"] = currentPumpCommand ? "ON" : "OFF";
+
+        String packet;
+        serializeJson(doc, packet);
+
+        String encryptedPacket = CryptoManager::encrypt(packet, currentConfig.lora_key);
+
+        // Envoyer sans attendre d'ACK
+        LoRa.beginPacket();
+        LoRa.print(encryptedPacket);
+        LoRa.endPacket();
+
+        // 4. Mettre à jour le timestamp, car nous venons de communiquer
+        lastLoRaTransmissionTimestamp = millis();
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     pinMode(LEVEL_SENSOR_PIN, INPUT_PULLUP);
@@ -136,6 +176,7 @@ void startStaMode() {
     xTaskCreate(Task_Control_Logic, "Logic", 4096, NULL, 1, NULL);
     xTaskCreate(Task_LoRa_Manager, "LoRa", 4096, NULL, 3, NULL);
     xTaskCreate(Task_GPIO_Handler, "GPIO", 2048, NULL, 2, NULL);
+    xTaskCreate(Task_Status_Reporter, "Status Reporter", 2048, NULL, 1, NULL);
 
     // --- Serveur Web ---
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -294,6 +335,7 @@ bool sendReliableCommand(const String& packet) { /* ... (inchangé) ... */
     for (int i = 0; i < MAX_RETRIES; i++) {
         sendLoRaMessage(packet);
         if (xSemaphoreTake(ackSemaphore, ACK_TIMEOUT) == pdTRUE) {
+            lastLoRaTransmissionTimestamp = millis();
             return true; // ACK reçu
         }
         Serial.printf("ACK timeout. Retry %d/%d\n", i + 1, MAX_RETRIES);
