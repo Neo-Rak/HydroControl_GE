@@ -35,6 +35,7 @@ SystemConfig currentConfig;
 // --- Structures de Données des Noeuds ---
 struct Node {
     String id;
+    String name; // NOUVEAU CHAMP
     NodeRole type;
     long lastSeen;
     int rssi;
@@ -61,6 +62,27 @@ String getSystemStatusJson();
 void sendLoRaMessage(const String& message);
 void Task_LoRa_Handler(void *pvParameters);
 void Task_Node_Janitor(void *pvParameters);
+void saveNodeName(const String& nodeId, const String& nodeName);
+String loadNodeName(const String& nodeId);
+
+
+// --- Fonctions de Persistance des Noms ---
+void saveNodeName(const String& nodeId, const String& nodeName) {
+    preferences.begin("node-names", false); // R/W mode
+    preferences.putString(nodeId.c_str(), nodeName);
+    preferences.end();
+    Serial.printf("Saved name for %s: %s\n", nodeId.c_str(), nodeName.c_str());
+}
+
+String loadNodeName(const String& nodeId) {
+    preferences.begin("node-names", true); // Read-only
+    String name = preferences.getString(nodeId.c_str(), "");
+    preferences.end();
+    if (name.length() > 0) {
+        Serial.printf("Loaded name for %s: %s\n", nodeId.c_str(), name.c_str());
+    }
+    return name;
+}
 
 
 void setup() {
@@ -209,6 +231,53 @@ void startStaMode() {
         }
     });
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "application/json", getSystemStatusJson()); });
+
+    // Nouvelle route pour définir le nom d'un noeud
+    server.on("/api/set-name", HTTP_POST, [](AsyncWebServerRequest *request){
+        String nodeId, nodeName;
+        // ArduinoJson 6+
+        StaticJsonDocument<128> doc;
+        deserializeJson(doc, request->getParam("body", true)->value());
+
+        nodeId = doc["id"].as<String>();
+        nodeName = doc["name"].as<String>();
+
+        if (nodeId.length() > 0 && nodeName.length() > 0) {
+            bool updated = false;
+            if (xSemaphoreTake(nodeListMutex, portMAX_DELAY) == pdTRUE) {
+                for (int i = 0; i < nodeCount; i++) {
+                    if (nodeList[i].id.equals(nodeId)) {
+                        nodeList[i].name = nodeName;
+                        saveNodeName(nodeId, nodeName);
+                        updated = true;
+                        break;
+                    }
+                }
+                xSemaphoreGive(nodeListMutex);
+            }
+
+            if (updated) {
+                events.send(getSystemStatusJson().c_str(), "update", millis());
+            }
+
+            request->send(200, "text/plain", "Name updated successfully.");
+        } else {
+            request->send(400, "text/plain", "Invalid request.");
+        }
+    }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
+        // Handler pour le corps de la requête JSON
+        if (!index) {
+            request->_tempObject = new String();
+        }
+        String* body = (String*)request->_tempObject;
+        body->concat((char*)data, len);
+        if (index + len == total) {
+            request->addParam(new AsyncWebParameter("body", *body, true)); // true for POST
+            delete body;
+            request->_tempObject = nullptr;
+        }
+    });
+
     server.addHandler(&events);
     server.begin();
 }
@@ -302,10 +371,12 @@ void registerOrUpdateNode(String id, NodeRole role, String status, int rssi) {
             }
         } else if (nodeCount < MAX_NODES) { // Nouveau noeud
             nodeList[nodeCount].id = id;
+            nodeList[nodeCount].name = loadNodeName(id); // Charger le nom
             nodeList[nodeCount].type = role;
             nodeList[nodeCount].lastSeen = millis();
             nodeList[nodeCount].rssi = rssi;
             nodeList[nodeCount].status = status;
+            nodeList[nodeCount].assignedTo = ""; // Initialisation
             nodeCount++;
         }
         xSemaphoreGive(nodeListMutex);
@@ -328,6 +399,7 @@ String getSystemStatusJson() {
         for (int i = 0; i < nodeCount; i++) {
             JsonObject node = nodes.createNestedObject();
             node["id"] = nodeList[i].id;
+            node["name"] = nodeList[i].name;
             switch(nodeList[i].type) {
                 case ROLE_AQUA_RESERV_PRO: node["type"] = "AquaReservPro"; break;
                 case ROLE_WELLGUARD_PRO: node["type"] = "WellguardPro"; break;
