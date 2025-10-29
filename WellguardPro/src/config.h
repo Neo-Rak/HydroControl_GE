@@ -12,5 +12,9 @@
 // --- Configuration Réseau ---
 #define PRE_SHARED_KEY "HydroControl-GE-Super-Secret-Key-2025"
 
+// --- Configuration du point d'accès initial ---
+#define AP_SSID "WellguardPro-Setup"
+#define AP_PASSWORD "config1234"
+
 // --- Identifiants du module ---
 // L'adresse MAC sera utilisée comme ID unique
