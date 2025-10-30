@@ -10,7 +10,9 @@
 #include "Message.h"
 #include "Crypto.h"
 
-// ... (déclarations globales inchangées) ...
+// --- FreeRTOS Handles ---
+QueueHandle_t ledStateQueue;
+
 // --- Clés de Stockage ---
 #define PREF_KEY_WIFI_SSID "wifi_ssid"
 #define PREF_KEY_WIFI_PASS "wifi_pass"
@@ -25,7 +27,6 @@ struct SystemConfig {
     String wifi_pass;
     String lora_key;
 };
-
 SystemConfig currentConfig;
 
 // Objets globaux
@@ -44,6 +45,7 @@ void onReceive(int packetSize);
 void handleLoRaPacket(const String& packet);
 void sendLoRaMessage(const String& message);
 void setRelayState(bool newState);
+void Task_LED_Manager(void *pvParameters);
 
 void Task_Status_Reporter(void *pvParameters) {
     for (;;) {
@@ -61,33 +63,40 @@ void Task_Status_Reporter(void *pvParameters) {
 
         String packet;
         serializeJson(doc, packet);
-        String encryptedPacket = CryptoManager::encrypt(packet, currentConfig.lora_key);
-
-        LoRa.beginPacket();
-        LoRa.print(encryptedPacket);
-        LoRa.endPacket();
-
+        sendLoRaMessage(packet);
         lastLoRaTransmissionTimestamp = millis();
     }
 }
 
 void setup() {
     Serial.begin(115200);
+
+    pinMode(RED_LED_PIN, OUTPUT);
+    pinMode(YELLOW_LED_PIN, OUTPUT);
+    pinMode(BLUE_LED_PIN, OUTPUT);
+    digitalWrite(RED_LED_PIN, LOW);
+    digitalWrite(YELLOW_LED_PIN, LOW);
+    digitalWrite(BLUE_LED_PIN, LOW);
+
     pinMode(RELAY_PIN, OUTPUT);
     digitalWrite(RELAY_PIN, LOW);
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     deviceId = WiFi.macAddress();
     deviceId.replace(":", "");
 
+    ledStateQueue = xQueueCreate(10, sizeof(LED_State));
+
+    LED_State initState = INIT;
+    xQueueSend(ledStateQueue, &initState, 0);
+
     if (loadConfiguration()) startStaMode();
     else startApMode();
 }
 
 void loop() {
-    delay(1000);
+    vTaskDelay(portMAX_DELAY);
 }
 
-// ... (loadConfiguration et startApMode inchangés) ...
 bool loadConfiguration() {
     preferences.begin(PREF_NAMESPACE, true);
     currentConfig.wifi_ssid = preferences.getString(PREF_KEY_WIFI_SSID, "");
@@ -108,13 +117,17 @@ const char* AP_FORM_HTML = R"rawliteral(
   <input type="text" id="ssid" name="ssid" required><br>
   <label for="pass">Mot de Passe Wi-Fi</label><br>
   <input type="password" id="pass" name="pass"><br>
-  <label for="lora_key">Cl&eacute; LoRa</label><br>
+  <label for="lora_key">Clé LoRa</label><br>
   <input type="text" id="lora_key" name="lora_key" required><br><br>
-  <input type="submit" value="Sauvegarder et Red&eacute;marrer">
+  <input type="submit" value="Sauvegarder et Redémarrer">
 </form>
 </body></html>
 )rawliteral";
+
 void startApMode() {
+    LED_State configState = CONFIG_MODE;
+    xQueueSend(ledStateQueue, &configState, 0);
+
     WiFi.softAP(AP_SSID, AP_PASSWORD);
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "text/html", AP_FORM_HTML); });
     server.on("/save", HTTP_POST, [](AsyncWebServerRequest *request) {
@@ -130,17 +143,35 @@ void startApMode() {
     server.begin();
     Serial.println("AP Mode Started. Connect to " + String(AP_SSID));
 }
+
 void startStaMode() {
     WiFi.mode(WIFI_STA);
     WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
-    while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+    int retries = 0;
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+        if (++retries > 20) {
+            LED_State errorState = CONNECTIVITY_ERROR;
+            xQueueSend(ledStateQueue, &errorState, 0);
+        }
+    }
     Serial.println("\nWiFi Connected. IP: " + WiFi.localIP().toString());
 
-    if(!LittleFS.begin(true)) { Serial.println("LittleFS Mount Failed"); return; }
+    if(!LittleFS.begin(true)) {
+        Serial.println("LittleFS Mount Failed");
+        LED_State errorState = CRITICAL_ERROR;
+        xQueueSend(ledStateQueue, &errorState, 0);
+        while(1);
+    }
 
     SPI.begin();
     LoRa.setPins(LORA_SS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
-    if (!LoRa.begin(LORA_FREQ)) while(1);
+    if (!LoRa.begin(LORA_FREQ)) {
+        LED_State errorState = CRITICAL_ERROR;
+        xQueueSend(ledStateQueue, &errorState, 0);
+        while(1);
+    }
 
     String discoveryPacket = LoRaMessage::serializeDiscovery(deviceId.c_str(), ROLE_WELLGUARD_PRO);
     sendLoRaMessage(discoveryPacket);
@@ -148,9 +179,12 @@ void startStaMode() {
     LoRa.onReceive(onReceive);
     LoRa.receive();
 
+    LED_State opState = OPERATIONAL;
+    xQueueSend(ledStateQueue, &opState, 0);
+
+    xTaskCreate(Task_LED_Manager, "LED Manager", 2048, NULL, 0, NULL);
     xTaskCreate(Task_Status_Reporter, "Status Reporter", 2048, NULL, 1, NULL);
 
-    // --- Serveur Web ---
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(LittleFS, "/index.html", "text/html");
     });
@@ -168,6 +202,10 @@ void startStaMode() {
 
 void onReceive(int packetSize) {
     if (packetSize == 0) return;
+
+    LED_State activityState = LORA_ACTIVITY;
+    xQueueSendFromISR(ledStateQueue, &activityState, NULL);
+
     String encryptedPacket = "";
     while (LoRa.available()) encryptedPacket += (char)LoRa.read();
 
@@ -207,9 +245,70 @@ void setRelayState(bool newState) {
 }
 
 void sendLoRaMessage(const String& message) {
+    LED_State activityState = LORA_ACTIVITY;
+    xQueueSend(ledStateQueue, &activityState, 0);
+
     String encrypted = CryptoManager::encrypt(message, currentConfig.lora_key);
     LoRa.beginPacket();
     LoRa.print(encrypted);
     LoRa.endPacket();
     Serial.printf("Sent LoRa: %s\n", message.c_str());
+}
+
+void Task_LED_Manager(void *pvParameters) {
+    LED_State currentState = INIT;
+    LED_State previousState = OPERATIONAL;
+    unsigned long lastBlinkTime = 0;
+    bool ledOn = false;
+
+    auto turnOffAllLeds = []() {
+        digitalWrite(RED_LED_PIN, LOW);
+        digitalWrite(YELLOW_LED_PIN, LOW);
+        digitalWrite(BLUE_LED_PIN, LOW);
+    };
+
+    for (;;) {
+        if (xQueueReceive(ledStateQueue, &currentState, 0) == pdPASS) {
+            turnOffAllLeds();
+            if (currentState != LORA_ACTIVITY) {
+                previousState = currentState;
+            }
+        }
+
+        switch (currentState) {
+            case INIT:
+                if (millis() - lastBlinkTime > 500) {
+                    ledOn = !ledOn;
+                    digitalWrite(YELLOW_LED_PIN, ledOn);
+                    lastBlinkTime = millis();
+                }
+                break;
+            case CONFIG_MODE:
+                digitalWrite(YELLOW_LED_PIN, HIGH);
+                break;
+            case OPERATIONAL:
+                digitalWrite(BLUE_LED_PIN, HIGH);
+                break;
+            case LORA_ACTIVITY:
+                digitalWrite(BLUE_LED_PIN, HIGH);
+                vTaskDelay(pdMS_TO_TICKS(50));
+                digitalWrite(BLUE_LED_PIN, LOW);
+                vTaskDelay(pdMS_TO_TICKS(50));
+                currentState = previousState;
+                turnOffAllLeds();
+                break;
+            case CONNECTIVITY_ERROR:
+                if (millis() - lastBlinkTime > 500) {
+                    ledOn = !ledOn;
+                    digitalWrite(RED_LED_PIN, ledOn);
+                    lastBlinkTime = millis();
+                }
+                break;
+            case CRITICAL_ERROR:
+                digitalWrite(RED_LED_PIN, HIGH);
+                break;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 }

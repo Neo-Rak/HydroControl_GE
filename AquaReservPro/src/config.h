@@ -24,3 +24,17 @@
 // --- États possibles ---
 enum OperatingMode { AUTO, MANUAL };
 enum LevelState { LEVEL_EMPTY, LEVEL_FULL, LEVEL_UNKNOWN };
+
+// --- Configuration des LEDs de Diagnostic ---
+#define RED_LED_PIN    13
+#define YELLOW_LED_PIN 12
+#define BLUE_LED_PIN   15
+
+enum LED_State {
+    INIT,
+    CONFIG_MODE,
+    OPERATIONAL,
+    LORA_ACTIVITY,
+    CONNECTIVITY_ERROR,
+    CRITICAL_ERROR
+};

@@ -10,10 +10,11 @@
 #include "Message.h"
 #include "Crypto.h"
 
-// ... (déclarations globales et FreeRTOS handles inchangés) ...
+// --- FreeRTOS Handles ---
 QueueHandle_t commandQueue;
+QueueHandle_t ledStateQueue;
 SemaphoreHandle_t ackSemaphore;
-// ... (déclarations des variables globales et structures comme avant)
+
 // --- Clés de Stockage ---
 #define PREF_KEY_WIFI_SSID "wifi_ssid"
 #define PREF_KEY_WIFI_PASS "wifi_pass"
@@ -51,55 +52,52 @@ void Task_Control_Logic(void *pvParameters);
 void Task_Sensor_Handler(void *pvParameters);
 void Task_LoRa_Manager(void *pvParameters);
 void Task_GPIO_Handler(void *pvParameters);
+void Task_LED_Manager(void *pvParameters);
 void sendLoRaMessage(const String& message);
 bool sendReliableCommand(const String& packet);
 void triggerPumpCommand(bool command);
 
 void Task_Status_Reporter(void *pvParameters) {
     for (;;) {
-        // 1. Dormir pendant l'intervalle nominal du heartbeat
         vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS));
-
-        // 2. Vérifier si une communication a déjà eu lieu récemment
         unsigned long elapsedTime = millis() - lastLoRaTransmissionTimestamp;
         if (elapsedTime < HEARTBEAT_INTERVAL_MS) {
-            // Un message critique a été envoyé il y a moins de 2 minutes.
-            // Le heartbeat est inutile. On saute ce cycle.
             continue;
         }
-
-        // 3. Si le module a été silencieux, envoyer le statut complet
         StaticJsonDocument<256> doc;
         doc["type"] = "STATUS_UPDATE";
         doc["sourceId"] = deviceId;
         doc["level"] = (currentLevel == LEVEL_FULL) ? "FULL" : "EMPTY";
         doc["mode"] = (currentMode == AUTO) ? "AUTO" : "MANUAL";
         doc["pump"] = currentPumpCommand ? "ON" : "OFF";
-
         String packet;
         serializeJson(doc, packet);
-
-        String encryptedPacket = CryptoManager::encrypt(packet, currentConfig.lora_key);
-
-        // Envoyer sans attendre d'ACK
-        LoRa.beginPacket();
-        LoRa.print(encryptedPacket);
-        LoRa.endPacket();
-
-        // 4. Mettre à jour le timestamp, car nous venons de communiquer
+        sendLoRaMessage(packet); // Utilise la fonction qui gère le chiffrement et l'état LED
         lastLoRaTransmissionTimestamp = millis();
     }
 }
 
 void setup() {
     Serial.begin(115200);
+
+    pinMode(RED_LED_PIN, OUTPUT);
+    pinMode(YELLOW_LED_PIN, OUTPUT);
+    pinMode(BLUE_LED_PIN, OUTPUT);
+    digitalWrite(RED_LED_PIN, LOW);
+    digitalWrite(YELLOW_LED_PIN, LOW);
+    digitalWrite(BLUE_LED_PIN, LOW);
+
     pinMode(LEVEL_SENSOR_PIN, INPUT_PULLUP);
     pinMode(BUTTON_PIN, INPUT_PULLUP);
     deviceId = WiFi.macAddress();
     deviceId.replace(":", "");
 
+    ledStateQueue = xQueueCreate(10, sizeof(LED_State));
     commandQueue = xQueueCreate(10, sizeof(char[256]));
     ackSemaphore = xSemaphoreCreateBinary();
+
+    LED_State initState = INIT;
+    xQueueSend(ledStateQueue, &initState, 0);
 
     if (loadConfiguration()) startStaMode();
     else startApMode();
@@ -107,7 +105,6 @@ void setup() {
 
 void loop() { vTaskDelay(portMAX_DELAY); }
 
-// ... (loadConfiguration, saveOperationalConfig, startApMode inchangés) ...
 bool loadConfiguration() {
     preferences.begin(PREF_NAMESPACE, true);
     currentConfig.wifi_ssid = preferences.getString(PREF_KEY_WIFI_SSID, "");
@@ -119,6 +116,7 @@ bool loadConfiguration() {
 
     return (currentConfig.wifi_ssid.length() > 0 && currentConfig.lora_key.length() > 0);
 }
+
 const char* AP_FORM_HTML = R"rawliteral(
 <!DOCTYPE HTML><html><head>
 <title>HydroControl-GE Configuration</title>
@@ -130,12 +128,13 @@ const char* AP_FORM_HTML = R"rawliteral(
   <input type="text" id="ssid" name="ssid" required><br>
   <label for="pass">Mot de Passe Wi-Fi</label><br>
   <input type="password" id="pass" name="pass"><br>
-  <label for="lora_key">Cl&eacute; LoRa</label><br>
+  <label for="lora_key">Clé LoRa</label><br>
   <input type="text" id="lora_key" name="lora_key" required><br><br>
-  <input type="submit" value="Sauvegarder et Red&eacute;marrer">
+  <input type="submit" value="Sauvegarder et Redémarrer">
 </form>
 </body></html>
 )rawliteral";
+
 void saveOperationalConfig() {
     preferences.begin(PREF_NAMESPACE, false);
     preferences.putUChar(PREF_KEY_MODE, (unsigned char)currentMode);
@@ -143,7 +142,11 @@ void saveOperationalConfig() {
     preferences.end();
     Serial.println("Operational config saved.");
 }
+
 void startApMode() {
+    LED_State configState = CONFIG_MODE;
+    xQueueSend(ledStateQueue, &configState, 0);
+
     WiFi.softAP(AP_SSID, AP_PASSWORD);
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "text/html", AP_FORM_HTML); });
     server.on("/save", HTTP_POST, [](AsyncWebServerRequest *request) {
@@ -159,26 +162,46 @@ void startApMode() {
     server.begin();
     Serial.println("AP Mode Started. Connect to " + String(AP_SSID));
 }
+
 void startStaMode() {
     WiFi.mode(WIFI_STA);
     WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
-    while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+    int retries = 0;
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+        if (++retries > 20) {
+            LED_State errorState = CONNECTIVITY_ERROR;
+            xQueueSend(ledStateQueue, &errorState, 0);
+        }
+    }
     Serial.println("\nWiFi Connected. IP: " + WiFi.localIP().toString());
 
-    if(!LittleFS.begin(true)) { Serial.println("LittleFS Mount Failed"); return; }
+    if(!LittleFS.begin(true)) {
+        Serial.println("LittleFS Mount Failed");
+        LED_State errorState = CRITICAL_ERROR;
+        xQueueSend(ledStateQueue, &errorState, 0);
+        while(1);
+    }
 
     SPI.begin();
     LoRa.setPins(LORA_SS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
-    if (!LoRa.begin(LORA_FREQ)) while (1);
+    if (!LoRa.begin(LORA_FREQ)) {
+        LED_State errorState = CRITICAL_ERROR;
+        xQueueSend(ledStateQueue, &errorState, 0);
+        while (1);
+    }
 
-    // Démarrage des tâches
+    LED_State opState = OPERATIONAL;
+    xQueueSend(ledStateQueue, &opState, 0);
+
+    xTaskCreate(Task_LED_Manager, "LED Manager", 2048, NULL, 0, NULL);
     xTaskCreate(Task_Sensor_Handler, "Sensor", 2048, NULL, 2, NULL);
     xTaskCreate(Task_Control_Logic, "Logic", 4096, NULL, 1, NULL);
     xTaskCreate(Task_LoRa_Manager, "LoRa", 4096, NULL, 3, NULL);
     xTaskCreate(Task_GPIO_Handler, "GPIO", 2048, NULL, 2, NULL);
     xTaskCreate(Task_Status_Reporter, "Status Reporter", 2048, NULL, 1, NULL);
 
-    // --- Serveur Web ---
     server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
         request->send(LittleFS, "/index.html", "text/html");
     });
@@ -196,8 +219,7 @@ void startStaMode() {
     server.begin();
 }
 
-// ... (toutes les tâches FreeRTOS restent identiques) ...
-void Task_Sensor_Handler(void *pvParameters) { /* ... (inchangé) ... */
+void Task_Sensor_Handler(void *pvParameters) {
     LevelState lastUnstableLevel = LEVEL_UNKNOWN;
     unsigned long levelChangeTimestamp = 0;
     for (;;) {
@@ -237,7 +259,7 @@ void Task_Control_Logic(void *pvParameters) {
 void Task_GPIO_Handler(void *pvParameters) {
     int lastButtonState = HIGH;
     unsigned long lastDebounceTime = 0;
-    const int debounceDelay = 50; // ms
+    const int debounceDelay = 50;
 
     for (;;) {
         int buttonState = digitalRead(BUTTON_PIN);
@@ -246,7 +268,7 @@ void Task_GPIO_Handler(void *pvParameters) {
         }
 
         if ((millis() - lastDebounceTime) > debounceDelay) {
-            if (buttonState == LOW && lastButtonState == HIGH) { // Front descendant (bouton pressé)
+            if (buttonState == LOW && lastButtonState == HIGH) {
                 currentMode = (currentMode == AUTO) ? MANUAL : AUTO;
                 Serial.printf("Mode switched to %s\n", currentMode == AUTO ? "AUTO" : "MANUAL");
 
@@ -276,27 +298,25 @@ void triggerPumpCommand(bool command) {
     }
 }
 
-
-void Task_LoRa_Manager(void *pvParameters) { /* ... (inchangé, mais la logique d'envoi est maintenant appelée par triggerPumpCommand) ... */
+void Task_LoRa_Manager(void *pvParameters) {
     String discoveryPacket = LoRaMessage::serializeDiscovery(deviceId.c_str(), ROLE_AQUA_RESERV_PRO);
     sendLoRaMessage(discoveryPacket);
 
     char commandToSend[256];
 
     for (;;) {
-        // Priorité 1: Traiter les commandes en attente
         if (xQueueReceive(commandQueue, &commandToSend, (TickType_t)10) == pdPASS) {
             if (sendReliableCommand(String(commandToSend))) {
                 Serial.println("Command sent successfully with ACK.");
             } else {
                 Serial.println("Command failed after all retries.");
-                // TODO: Logique de gestion d'erreur (ex: notifier la centrale)
             }
         }
 
-        // Priorité 2: Traiter les paquets entrants
         int packetSize = LoRa.parsePacket();
         if (packetSize) {
+            LED_State activityState = LORA_ACTIVITY;
+            xQueueSend(ledStateQueue, &activityState, 0);
             String encryptedPacket = "";
             while (LoRa.available()) encryptedPacket += (char)LoRa.read();
             String packet = CryptoManager::decrypt(encryptedPacket, currentConfig.lora_key);
@@ -310,7 +330,6 @@ void Task_LoRa_Manager(void *pvParameters) { /* ... (inchangé, mais la logique 
                 if (type == MessageType::COMMAND_ACK && src.equals(assignedWellId)) {
                     xSemaphoreGive(ackSemaphore);
                 }
-                // ... (autre logique de réception comme l'assignation)
                 String targetId = doc["tgt"];
 
                 if (targetId.equals(deviceId)) {
@@ -328,7 +347,7 @@ void Task_LoRa_Manager(void *pvParameters) { /* ... (inchangé, mais la logique 
     }
  }
 
-bool sendReliableCommand(const String& packet) { /* ... (inchangé) ... */
+bool sendReliableCommand(const String& packet) {
     const int MAX_RETRIES = 3;
     const TickType_t ACK_TIMEOUT = 2000 / portTICK_PERIOD_MS;
 
@@ -336,12 +355,11 @@ bool sendReliableCommand(const String& packet) { /* ... (inchangé) ... */
         sendLoRaMessage(packet);
         if (xSemaphoreTake(ackSemaphore, ACK_TIMEOUT) == pdTRUE) {
             lastLoRaTransmissionTimestamp = millis();
-            return true; // ACK reçu
+            return true;
         }
         Serial.printf("ACK timeout. Retry %d/%d\n", i + 1, MAX_RETRIES);
     }
 
-    // Si on arrive ici, les tentatives directes ont échoué. On demande un relais.
     Serial.println("Direct communication failed. Requesting relay from Centrale.");
     StaticJsonDocument<256> doc;
     deserializeJson(doc, packet);
@@ -350,17 +368,78 @@ bool sendReliableCommand(const String& packet) { /* ... (inchangé) ... */
     serializeJson(doc, relayPacket);
 
     sendLoRaMessage(relayPacket);
-    if (xSemaphoreTake(ackSemaphore, ACK_TIMEOUT * 2) == pdTRUE) { // Timeout plus long pour le relais
+    if (xSemaphoreTake(ackSemaphore, ACK_TIMEOUT * 2) == pdTRUE) {
         return true;
     }
 
-    return false; // Échec final
+    return false;
  }
 
-void sendLoRaMessage(const String& message) { /* ... (inchangé) ... */
+void sendLoRaMessage(const String& message) {
+    LED_State activityState = LORA_ACTIVITY;
+    xQueueSend(ledStateQueue, &activityState, 0);
+
     String encrypted = CryptoManager::encrypt(message, currentConfig.lora_key);
     LoRa.beginPacket();
     LoRa.print(encrypted);
     LoRa.endPacket();
     Serial.printf("Sent LoRa message: %s\n", message.c_str());
  }
+
+void Task_LED_Manager(void *pvParameters) {
+    LED_State currentState = INIT;
+    LED_State previousState = OPERATIONAL;
+    unsigned long lastBlinkTime = 0;
+    bool ledOn = false;
+
+    auto turnOffAllLeds = []() {
+        digitalWrite(RED_LED_PIN, LOW);
+        digitalWrite(YELLOW_LED_PIN, LOW);
+        digitalWrite(BLUE_LED_PIN, LOW);
+    };
+
+    for (;;) {
+        if (xQueueReceive(ledStateQueue, &currentState, 0) == pdPASS) {
+            turnOffAllLeds();
+            if (currentState != LORA_ACTIVITY) {
+                previousState = currentState;
+            }
+        }
+
+        switch (currentState) {
+            case INIT:
+                if (millis() - lastBlinkTime > 500) {
+                    ledOn = !ledOn;
+                    digitalWrite(YELLOW_LED_PIN, ledOn);
+                    lastBlinkTime = millis();
+                }
+                break;
+            case CONFIG_MODE:
+                digitalWrite(YELLOW_LED_PIN, HIGH);
+                break;
+            case OPERATIONAL:
+                digitalWrite(BLUE_LED_PIN, HIGH);
+                break;
+            case LORA_ACTIVITY:
+                digitalWrite(BLUE_LED_PIN, HIGH);
+                vTaskDelay(pdMS_TO_TICKS(50));
+                digitalWrite(BLUE_LED_PIN, LOW);
+                vTaskDelay(pdMS_TO_TICKS(50));
+                currentState = previousState;
+                turnOffAllLeds();
+                break;
+            case CONNECTIVITY_ERROR:
+                if (millis() - lastBlinkTime > 500) {
+                    ledOn = !ledOn;
+                    digitalWrite(RED_LED_PIN, ledOn);
+                    lastBlinkTime = millis();
+                }
+                break;
+            case CRITICAL_ERROR:
+                digitalWrite(RED_LED_PIN, HIGH);
+                break;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
+}
