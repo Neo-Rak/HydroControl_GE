@@ -1,8 +1,11 @@
 ### **Fiche Technique du Système — HydroControl-GE**
 
 **Référence Document :** HGE-TS-232-FR
+
 **Version :** 1.0
+
 **Applicable au Firmware :** v2.3.2 et ultérieures
+
 **Date d'Émission :** 29 octobre 2025
 
 #### **1.0 Description Générale et Architecture Système**
@@ -102,6 +105,3 @@ Chaque module du système est architecturé autour d'une unité de traitement de
 *   **Température de Fonctionnement :** -20°C à +60°C.
 *   **Humidité de Fonctionnement :** 5% à 95% sans condensation.
 *   **Indice de Protection Requis pour le Boîtier Externe :** IP67.
-
----
-**Fin de la Fiche Technique**
