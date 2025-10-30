@@ -37,6 +37,7 @@ AsyncWebServer server(80);
 // Variables d'état globales
 String deviceId;
 String assignedWellId = "";
+bool isWellShared = false; // NOUVEAU: Indique si le puits assigné est partagé
 OperatingMode currentMode = AUTO;
 LevelState currentLevel = LEVEL_UNKNOWN;
 bool currentPumpCommand = false;
@@ -290,10 +291,28 @@ void Task_GPIO_Handler(void *pvParameters) {
 
 void triggerPumpCommand(bool command) {
     currentPumpCommand = command;
-    if (!assignedWellId.isEmpty()) {
-        String cmdPacket = LoRaMessage::serializeCommand(deviceId.c_str(), assignedWellId.c_str(), command ? CMD_PUMP_ON : CMD_PUMP_OFF);
-        char buffer[256];
-        cmdPacket.toCharArray(buffer, sizeof(buffer));
+    if (assignedWellId.isEmpty()) return;
+
+    String packet;
+    if (isWellShared) {
+        // Si le puits est partagé, on envoie une REQUÊTE à la centrale
+        MessageType requestType = command ? REQUEST_PUMP_ON : REQUEST_PUMP_OFF;
+        packet = LoRaMessage::serializePumpRequest(deviceId.c_str(), requestType);
+        Serial.println("Well is shared. Sending request to Centrale.");
+    } else {
+        // Sinon, on envoie une COMMANDE directe au puits
+        CommandType cmdType = command ? CMD_PUMP_ON : CMD_PUMP_OFF;
+        packet = LoRaMessage::serializeCommand(deviceId.c_str(), assignedWellId.c_str(), cmdType);
+        Serial.println("Well is not shared. Sending direct command.");
+    }
+
+    char buffer[256];
+    packet.toCharArray(buffer, sizeof(buffer));
+    // Pour les requêtes, nous n'attendons pas d'ACK du puits, donc on les envoie directement.
+    // Pour les commandes directes, on passe par la file de commande fiable.
+    if (isWellShared) {
+        sendLoRaMessage(packet);
+    } else {
         xQueueSend(commandQueue, &buffer, (TickType_t)10);
     }
 }
@@ -337,7 +356,9 @@ void Task_LoRa_Manager(void *pvParameters) {
                         String cmd = doc["cmd"];
                         if (cmd.equals("ASSIGN_WELL")) {
                             assignedWellId = doc["well_id"].as<String>();
-                            Serial.printf("Received new well assignment: %s\n", assignedWellId.c_str());
+                            // NOUVEAU: La centrale nous dit si le puits est partagé
+                            isWellShared = doc["is_shared"].as<bool>();
+                            Serial.printf("Received new well assignment: %s (Shared: %s)\n", assignedWellId.c_str(), isWellShared ? "Yes" : "No");
                             saveOperationalConfig();
                         }
                     }
