@@ -58,6 +58,7 @@ void startStaMode();
 bool loadConfiguration();
 void onReceive(int packetSize);
 void handleLoRaPacket(String packet, int rssi);
+void handlePumpRequest(String requesterId, MessageType requestType); // NOUVEAU
 void registerOrUpdateNode(String id, NodeRole type, String status, int rssi);
 String getSystemStatusJson();
 void sendLoRaMessage(const String& message);
@@ -240,30 +241,44 @@ void startStaMode() {
         if (request->hasParam("well", true)) wellId = request->getParam("well", true)->value();
 
         if (reservoirId.length() > 0 && wellId.length() > 0) {
-            // 1. Envoyer la commande de configuration
-            StaticJsonDocument<256> doc;
-            doc["type"] = MessageType::COMMAND;
-            doc["tgt"] = reservoirId;
-            doc["cmd"] = "ASSIGN_WELL";
-            doc["well_id"] = wellId;
-            String packet;
-            serializeJson(doc, packet);
-            sendLoRaMessage(packet);
-
-            // 2. Mettre à jour l'état local dans la centrale
+            bool isShared = false;
             if (xSemaphoreTake(nodeListMutex, portMAX_DELAY) == pdTRUE) {
+                // Mettre à jour l'assignation pour le réservoir
                 for (int i = 0; i < nodeCount; i++) {
                     if (nodeList[i].id.equals(reservoirId)) {
                         nodeList[i].assignedTo = wellId;
+                        break;
                     }
-                    if (nodeList[i].id.equals(wellId)) {
-                        nodeList[i].assignedTo = reservoirId;
+                }
+
+                // Déterminer si le puits est maintenant partagé
+                int assignments = 0;
+                for (int i = 0; i < nodeCount; i++) {
+                    if (nodeList[i].type == ROLE_AQUA_RESERV_PRO && nodeList[i].assignedTo.equals(wellId)) {
+                        assignments++;
+                    }
+                }
+                isShared = (assignments > 1);
+
+                // Informer TOUS les réservoirs liés de leur statut partagé/non partagé
+                for (int i = 0; i < nodeCount; i++) {
+                    if (nodeList[i].type == ROLE_AQUA_RESERV_PRO && nodeList[i].assignedTo.equals(wellId)) {
+                        StaticJsonDocument<256> doc;
+                        doc["type"] = MessageType::COMMAND;
+                        doc["tgt"] = nodeList[i].id;
+                        doc["cmd"] = "ASSIGN_WELL";
+                        doc["well_id"] = wellId;
+                        doc["is_shared"] = isShared; // Ajout de l'information cruciale
+                        String packet;
+                        serializeJson(doc, packet);
+                        sendLoRaMessage(packet);
+                         Serial.printf("Informing %s that well %s is shared: %s\n", nodeList[i].id.c_str(), wellId.c_str(), isShared ? "Yes" : "No");
                     }
                 }
                 xSemaphoreGive(nodeListMutex);
             }
 
-            request->send(200, "text/plain", "Assignation command sent and saved for " + reservoirId);
+            request->send(200, "text/plain", "Assignation command sent and updated for " + reservoirId);
         } else {
             request->send(400, "text/plain", "Missing parameters.");
         }
@@ -410,34 +425,45 @@ void Task_LED_Manager(void *pvParameters) {
 
 
 void handleLoRaPacket(String packet, int rssi) {
-    // ... (la logique de cette fonction reste identique à avant) ...
     StaticJsonDocument<256> doc;
     deserializeJson(doc, packet);
-    int type = doc["type"];
-    
-    if (type == MessageType::DISCOVERY) {
-        String id = doc["id"];
-        NodeRole role = (NodeRole)doc["role"].as<int>();
-        registerOrUpdateNode(id, role, "Discovered", rssi);
-        // Envoyer un WELCOME_ACK
-        StaticJsonDocument<128> ackDoc;
-        ackDoc["type"] = MessageType::WELCOME_ACK;
-        ackDoc["tgt"] = id;
-        String ackPacket;
-        serializeJson(ackDoc, ackPacket);
-        sendLoRaMessage(ackPacket);
-    } else if (type == MessageType::STATUS_UPDATE) {
-        String id = doc["id"];
-        String status = doc["status"];
-        registerOrUpdateNode(id, ROLE_UNKNOWN, status, rssi);
-    } else if (type == MessageType::RELAY_REQUEST) {
-        Serial.println("Received a relay request.");
-        // Le paquet de relais contient la commande originale.
-        // Nous la modifions pour la renvoyer comme une commande directe.
-        doc["type"] = MessageType::COMMAND;
-        String relayedPacket;
-        serializeJson(doc, relayedPacket);
-        sendLoRaMessage(relayedPacket); // La fonction d'envoi s'occupe du chiffrement.
+    MessageType type = (MessageType)doc["type"].as<int>();
+    String id = doc.containsKey("id") ? doc["id"].as<String>() : doc["src"].as<String>();
+
+    switch (type) {
+        case MessageType::DISCOVERY: {
+            NodeRole role = (NodeRole)doc["role"].as<int>();
+            registerOrUpdateNode(id, role, "Discovered", rssi);
+            StaticJsonDocument<128> ackDoc;
+            ackDoc["type"] = MessageType::WELCOME_ACK;
+            ackDoc["tgt"] = id;
+            String ackPacket;
+            serializeJson(ackDoc, ackPacket);
+            sendLoRaMessage(ackPacket);
+            break;
+        }
+        case MessageType::STATUS_UPDATE: {
+            String status = doc["status"];
+            registerOrUpdateNode(id, ROLE_UNKNOWN, status, rssi);
+            break;
+        }
+        case MessageType::RELAY_REQUEST: {
+            Serial.println("Received a relay request.");
+            doc["type"] = MessageType::COMMAND;
+            String relayedPacket;
+            serializeJson(doc, relayedPacket);
+            sendLoRaMessage(relayedPacket);
+            break;
+        }
+        case MessageType::REQUEST_PUMP_ON:
+        case MessageType::REQUEST_PUMP_OFF: {
+            Serial.printf("Received pump request type %d from %s\n", type, id.c_str());
+            handlePumpRequest(id, type);
+            break;
+        }
+        default:
+            // Ne rien faire pour les autres types de messages
+            break;
     }
 }
 void registerOrUpdateNode(String id, NodeRole role, String status, int rssi) {
@@ -530,4 +556,91 @@ void Task_Node_Janitor(void *pvParameters) {
             xSemaphoreGive(nodeListMutex);
         }
     }
+}
+
+void handlePumpRequest(String requesterId, MessageType requestType) {
+    if (xSemaphoreTake(nodeListMutex, portMAX_DELAY) != pdTRUE) return;
+
+    // 1. Trouver le puits assigné au demandeur
+    String wellId = "";
+    for (int i = 0; i < nodeCount; i++) {
+        if (nodeList[i].id.equals(requesterId)) {
+            wellId = nodeList[i].assignedTo;
+            break;
+        }
+    }
+
+    if (wellId.isEmpty()) {
+        Serial.printf("No well assigned to requester %s. Ignoring request.\n", requesterId.c_str());
+        xSemaphoreGive(nodeListMutex);
+        return;
+    }
+
+    // 2. Identifier tous les réservoirs assignés à ce même puits
+    String linkedReservoirIds[MAX_NODES];
+    int linkedReservoirCount = 0;
+    for (int i = 0; i < nodeCount; i++) {
+        if (nodeList[i].type == ROLE_AQUA_RESERV_PRO && nodeList[i].assignedTo.equals(wellId)) {
+            linkedReservoirIds[linkedReservoirCount++] = nodeList[i].id;
+        }
+    }
+
+    // 3. Appliquer la Règle d'Arbitrage "Sécurité Avant Tout"
+    if (requestType == REQUEST_PUMP_ON) {
+        // Règle de Démarrage : Démarrer si au moins un est vide ET aucun n'est plein.
+        bool isAnyReservoirFull = false;
+        for (int i = 0; i < linkedReservoirCount; i++) {
+            for (int j = 0; j < nodeCount; j++) {
+                if (nodeList[j].id.equals(linkedReservoirIds[i]) && nodeList[j].status.equalsIgnoreCase("PLEIN")) {
+                    isAnyReservoirFull = true;
+                    break;
+                }
+            }
+            if (isAnyReservoirFull) break;
+        }
+
+        if (isAnyReservoirFull) {
+            Serial.printf("Pump start request for well %s DENIED. A linked reservoir is full.\n", wellId.c_str());
+        } else {
+            Serial.printf("Pump start request for well %s ACCEPTED.\n", wellId.c_str());
+            StaticJsonDocument<256> doc;
+            doc["type"] = MessageType::COMMAND;
+            doc["tgt"] = wellId;
+            doc["cmd"] = "CMD_PUMP_ON";
+            String packet;
+            serializeJson(doc, packet);
+            sendLoRaMessage(packet);
+        }
+
+    } else if (requestType == REQUEST_PUMP_OFF) {
+        // Règle d'Arrêt : Arrêter seulement si aucun autre réservoir n'est demandeur (vide).
+        bool isAnotherReservoirEmpty = false;
+        for (int i = 0; i < linkedReservoirCount; i++) {
+            // Ignorer le demandeur actuel qui vient de passer à plein
+            if (linkedReservoirIds[i].equals(requesterId)) continue;
+
+            for (int j = 0; j < nodeCount; j++) {
+                if (nodeList[j].id.equals(linkedReservoirIds[i]) && nodeList[j].status.equalsIgnoreCase("VIDE")) {
+                    isAnotherReservoirEmpty = true;
+                    break;
+                }
+            }
+            if (isAnotherReservoirEmpty) break;
+        }
+
+        if (isAnotherReservoirEmpty) {
+            Serial.printf("Pump stop request for well %s IGNORED. Another reservoir still needs water.\n", wellId.c_str());
+        } else {
+            Serial.printf("Pump stop request for well %s ACCEPTED. All reservoirs are full.\n", wellId.c_str());
+            StaticJsonDocument<256> doc;
+            doc["type"] = MessageType::COMMAND;
+            doc["tgt"] = wellId;
+            doc["cmd"] = "CMD_PUMP_OFF";
+            String packet;
+            serializeJson(doc, packet);
+            sendLoRaMessage(packet);
+        }
+    }
+
+    xSemaphoreGive(nodeListMutex);
 }

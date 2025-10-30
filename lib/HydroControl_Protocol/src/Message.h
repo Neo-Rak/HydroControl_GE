@@ -11,7 +11,9 @@ enum MessageType {
     COMMAND_ACK,
     HEARTBEAT,
     RELAY_REQUEST,
-    SYNC_COMMAND
+    SYNC_COMMAND,
+    REQUEST_PUMP_ON,
+    REQUEST_PUMP_OFF
 };
 
 enum NodeRole {
@@ -76,6 +78,16 @@ public:
         doc["id"] = deviceId;
         doc["status"] = status;
         doc["rssi"] = rssi;
+        String output;
+        serializeJson(doc, output);
+        return output;
+    }
+
+    // --- Sérialisation d'une requête de pompe ---
+    static String serializePumpRequest(const char* sourceId, MessageType requestType) {
+        StaticJsonDocument<128> doc;
+        doc["type"] = requestType; // REQUEST_PUMP_ON ou REQUEST_PUMP_OFF
+        doc["src"] = sourceId;
         String output;
         serializeJson(doc, output);
         return output;
