@@ -12,6 +12,7 @@
 
 // --- FreeRTOS Handles ---
 QueueHandle_t loraRxQueue;
+QueueHandle_t ledStateQueue;
 SemaphoreHandle_t nodeListMutex;
 #define LORA_RX_QUEUE_SIZE 10
 #define LORA_RX_PACKET_MAX_LEN 256
@@ -62,6 +63,7 @@ String getSystemStatusJson();
 void sendLoRaMessage(const String& message);
 void Task_LoRa_Handler(void *pvParameters);
 void Task_Node_Janitor(void *pvParameters);
+void Task_LED_Manager(void *pvParameters);
 void saveNodeName(const String& nodeId, const String& nodeName);
 String loadNodeName(const String& nodeId);
 
@@ -88,8 +90,19 @@ String loadNodeName(const String& nodeId) {
 void setup() {
     Serial.begin(115200);
 
+    pinMode(RED_LED_PIN, OUTPUT);
+    pinMode(YELLOW_LED_PIN, OUTPUT);
+    pinMode(BLUE_LED_PIN, OUTPUT);
+    digitalWrite(RED_LED_PIN, LOW);
+    digitalWrite(YELLOW_LED_PIN, LOW);
+    digitalWrite(BLUE_LED_PIN, LOW);
+
+    ledStateQueue = xQueueCreate(10, sizeof(LED_State));
     loraRxQueue = xQueueCreate(LORA_RX_QUEUE_SIZE, sizeof(char[LORA_RX_PACKET_MAX_LEN]));
     nodeListMutex = xSemaphoreCreateMutex();
+
+    LED_State initState = INIT;
+    xQueueSend(ledStateQueue, &initState, 0);
 
     if (loadConfiguration()) startStaMode();
     else startApMode();
@@ -142,6 +155,9 @@ const char* AP_FORM_HTML = R"rawliteral(
 </body></html>
 )rawliteral";
 void startApMode() {
+    LED_State configState = CONFIG_MODE;
+    xQueueSend(ledStateQueue, &configState, 0);
+
     Serial.println("Starting Access Point: " + String(AP_SSID));
     WiFi.softAP(AP_SSID, AP_PASSWORD);
     IPAddress IP = WiFi.softAPIP();
@@ -174,21 +190,43 @@ void startApMode() {
 void startStaMode() {
     WiFi.mode(WIFI_STA);
     WiFi.begin(currentConfig.wifi_ssid.c_str(), currentConfig.wifi_pass.c_str());
-    while (WiFi.status() != WL_CONNECTED) { delay(500); Serial.print("."); }
+
+    int retries = 0;
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(500);
+        Serial.print(".");
+        if (++retries > 20) { // Environ 10 secondes
+            LED_State errorState = CONNECTIVITY_ERROR;
+            xQueueSend(ledStateQueue, &errorState, 0);
+        }
+    }
+
     Serial.println("\nWiFi Connected. IP: " + WiFi.localIP().toString());
 
-    if(!LittleFS.begin(true)) { Serial.println("LittleFS Mount Failed"); return; }
+    if(!LittleFS.begin(true)) {
+        Serial.println("LittleFS Mount Failed");
+        LED_State errorState = CRITICAL_ERROR;
+        xQueueSend(ledStateQueue, &errorState, 0);
+        while(1);
+    }
 
     SPI.begin();
     LoRa.setPins(LORA_SS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
-    if (!LoRa.begin(LORA_FREQ)) { Serial.println("Starting LoRa failed!"); while (1); }
+    if (!LoRa.begin(LORA_FREQ)) {
+        Serial.println("Starting LoRa failed!");
+        LED_State errorState = CRITICAL_ERROR;
+        xQueueSend(ledStateQueue, &errorState, 0);
+        while (1);
+    }
 
-    // Configurer le callback LoRa et mettre en mode réception
     LoRa.onReceive(onReceive);
     LoRa.receive();
     Serial.println("LoRa Initialized.");
 
-    // Démarrer la tâche de traitement LoRa
+    LED_State opState = OPERATIONAL;
+    xQueueSend(ledStateQueue, &opState, 0);
+
+    xTaskCreate(Task_LED_Manager, "LED Manager", 2048, NULL, 0, NULL);
     xTaskCreate(Task_LoRa_Handler, "LoRa Handler", 4096, NULL, 3, NULL);
     xTaskCreate(Task_Node_Janitor, "Node Janitor", 2048, NULL, 1, NULL);
 
@@ -233,50 +271,39 @@ void startStaMode() {
     server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){ request->send(200, "application/json", getSystemStatusJson()); });
 
     // Nouvelle route pour définir le nom d'un noeud
-    server.on("/api/set-name", HTTP_POST, [](AsyncWebServerRequest *request){
-        String nodeId, nodeName;
-        // ArduinoJson 6+
-        StaticJsonDocument<128> doc;
-        deserializeJson(doc, request->getParam("body", true)->value());
+    server.on("/api/set-name", HTTP_POST,
+        [](AsyncWebServerRequest *request){},
+        NULL,
+        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
+            StaticJsonDocument<128> doc;
+            deserializeJson(doc, (const char*) data, len);
 
-        nodeId = doc["id"].as<String>();
-        nodeName = doc["name"].as<String>();
+            String nodeId = doc["id"].as<String>();
+            String nodeName = doc["name"].as<String>();
 
-        if (nodeId.length() > 0 && nodeName.length() > 0) {
-            bool updated = false;
-            if (xSemaphoreTake(nodeListMutex, portMAX_DELAY) == pdTRUE) {
-                for (int i = 0; i < nodeCount; i++) {
-                    if (nodeList[i].id.equals(nodeId)) {
-                        nodeList[i].name = nodeName;
-                        saveNodeName(nodeId, nodeName);
-                        updated = true;
-                        break;
+            if (nodeId.length() > 0 && nodeName.length() > 0) {
+                bool updated = false;
+                if (xSemaphoreTake(nodeListMutex, portMAX_DELAY) == pdTRUE) {
+                    for (int i = 0; i < nodeCount; i++) {
+                        if (nodeList[i].id.equals(nodeId)) {
+                            nodeList[i].name = nodeName;
+                            saveNodeName(nodeId, nodeName);
+                            updated = true;
+                            break;
+                        }
                     }
+                    xSemaphoreGive(nodeListMutex);
                 }
-                xSemaphoreGive(nodeListMutex);
-            }
 
-            if (updated) {
-                events.send(getSystemStatusJson().c_str(), "update", millis());
+                if (updated) {
+                    events.send(getSystemStatusJson().c_str(), "update", millis());
+                }
+                request->send(200, "text/plain", "Name updated successfully.");
+            } else {
+                request->send(400, "text/plain", "Invalid request.");
             }
-
-            request->send(200, "text/plain", "Name updated successfully.");
-        } else {
-            request->send(400, "text/plain", "Invalid request.");
         }
-    }, NULL, [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
-        // Handler pour le corps de la requête JSON
-        if (!index) {
-            request->_tempObject = new String();
-        }
-        String* body = (String*)request->_tempObject;
-        body->concat((char*)data, len);
-        if (index + len == total) {
-            request->addParam(new AsyncWebParameter("body", *body, true)); // true for POST
-            delete body;
-            request->_tempObject = nullptr;
-        }
-    });
+    );
 
     server.addHandler(&events);
     server.begin();
@@ -284,6 +311,9 @@ void startStaMode() {
 
 void onReceive(int packetSize) {
     if (packetSize == 0 || packetSize > LORA_RX_PACKET_MAX_LEN) return;
+
+    LED_State activityState = LORA_ACTIVITY;
+    xQueueSendFromISR(ledStateQueue, &activityState, NULL);
 
     char packetBuffer[LORA_RX_PACKET_MAX_LEN];
     int len = 0;
@@ -317,6 +347,64 @@ void Task_LoRa_Handler(void *pvParameters) {
                 Serial.println("Failed to decrypt packet in LoRa Task.");
             }
         }
+    }
+}
+
+void Task_LED_Manager(void *pvParameters) {
+    LED_State currentState = INIT;
+    LED_State previousState = OPERATIONAL;
+    unsigned long lastBlinkTime = 0;
+    bool ledOn = false;
+
+    auto turnOffAllLeds = []() {
+        digitalWrite(RED_LED_PIN, LOW);
+        digitalWrite(YELLOW_LED_PIN, LOW);
+        digitalWrite(BLUE_LED_PIN, LOW);
+    };
+
+    for (;;) {
+        if (xQueueReceive(ledStateQueue, &currentState, 0) == pdPASS) {
+            turnOffAllLeds();
+            if (currentState != LORA_ACTIVITY) {
+                previousState = currentState;
+            }
+        }
+
+        switch (currentState) {
+            case INIT:
+                if (millis() - lastBlinkTime > 500) {
+                    ledOn = !ledOn;
+                    digitalWrite(YELLOW_LED_PIN, ledOn);
+                    lastBlinkTime = millis();
+                }
+                break;
+            case CONFIG_MODE:
+                digitalWrite(YELLOW_LED_PIN, HIGH);
+                break;
+            case OPERATIONAL:
+                digitalWrite(BLUE_LED_PIN, HIGH);
+                break;
+            case LORA_ACTIVITY:
+                digitalWrite(BLUE_LED_PIN, HIGH);
+                vTaskDelay(pdMS_TO_TICKS(50));
+                digitalWrite(BLUE_LED_PIN, LOW);
+                vTaskDelay(pdMS_TO_TICKS(50));
+                currentState = previousState;
+                turnOffAllLeds();
+                break;
+            case CONNECTIVITY_ERROR:
+                if (millis() - lastBlinkTime > 500) {
+                    ledOn = !ledOn;
+                    digitalWrite(RED_LED_PIN, ledOn);
+                    lastBlinkTime = millis();
+                }
+                break;
+            case CRITICAL_ERROR:
+                digitalWrite(RED_LED_PIN, HIGH);
+                break;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(50));
     }
 }
 
@@ -383,6 +471,9 @@ void registerOrUpdateNode(String id, NodeRole role, String status, int rssi) {
     }
 }
 void sendLoRaMessage(const String& message) {
+    LED_State activityState = LORA_ACTIVITY;
+    xQueueSend(ledStateQueue, &activityState, 0);
+
     String encrypted = CryptoManager::encrypt(message, currentConfig.lora_key);
     LoRa.beginPacket();
     LoRa.print(encrypted);
