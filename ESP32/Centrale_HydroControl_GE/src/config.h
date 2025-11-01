@@ -1,10 +1,12 @@
 #pragma once
 
 // --- Configuration Matérielle ---
-#define LORA_SS_PIN    5
-#define LORA_RST_PIN   14
-#define LORA_DIO0_PIN  2
-#define LORA_FREQ      433E6
+// Broches standard et sûres pour une carte ESP32 DevKit
+// Le bus VSPI par défaut (MOSI:23, MISO:19, SCK:18) est utilisé par la bibliothèque LoRa.
+#define LORA_SS_PIN    5  // GPIO5 (VSPI_SS)
+#define LORA_RST_PIN   14 // GPIO14
+#define LORA_DIO0_PIN  4  // GPIO4 (évite les broches de strapping comme GPIO2)
+#define LORA_FREQ      433E6 // 433 MHz
 
 // --- Configuration Réseau ---
 #define PRE_SHARED_KEY "HydroControl-GE-Super-Secret-Key-2025"
@@ -17,9 +19,10 @@
 #define MAX_NODES 32 // Nombre maximum de modules gérés
 
 // --- Configuration des LEDs de Diagnostic ---
-#define RED_LED_PIN    13
-#define YELLOW_LED_PIN 12
-#define BLUE_LED_PIN   15
+// Broches choisies pour éviter les conflits et les problèmes de démarrage (strapping pins)
+#define RED_LED_PIN    13 // GPIO13
+#define YELLOW_LED_PIN 27 // GPIO27
+#define BLUE_LED_PIN   25 // GPIO25
 
 enum LED_State {
     INIT,

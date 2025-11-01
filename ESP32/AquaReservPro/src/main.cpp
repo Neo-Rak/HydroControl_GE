@@ -261,6 +261,7 @@ void Task_GPIO_Handler(void *pvParameters) {
     int lastButtonState = HIGH;
     unsigned long lastDebounceTime = 0;
     const int debounceDelay = 50;
+    bool wasInManualMode = false; // Pour suivre si nous étions en mode manuel
 
     for (;;) {
         int buttonState = digitalRead(BUTTON_PIN);
@@ -269,16 +270,30 @@ void Task_GPIO_Handler(void *pvParameters) {
         }
 
         if ((millis() - lastDebounceTime) > debounceDelay) {
-            if (buttonState == LOW && lastButtonState == HIGH) {
-                currentMode = (currentMode == AUTO) ? MANUAL : AUTO;
-                Serial.printf("Mode switched to %s\n", currentMode == AUTO ? "AUTO" : "MANUAL");
+            if (buttonState == LOW && lastButtonState == HIGH) { // Flanc descendant = bouton pressé
 
-                if (currentMode == MANUAL) {
-                    bool newCommand = !currentPumpCommand;
-                    if (newCommand && currentLevel == LEVEL_FULL) {
-                        Serial.println("Manual start inhibited: reservoir is full.");
+                if (currentMode == AUTO) {
+                    // Passage de AUTO à MANUAL
+                    currentMode = MANUAL;
+                    wasInManualMode = true; // On entre en mode manuel
+                    Serial.println("Mode switched to MANUAL.");
+                    // Aucune commande n'est envoyée lors du passage en mode manuel
+                } else { // currentMode == MANUAL
+                    if (wasInManualMode) {
+                        // C'est la première action en mode manuel : on inverse la pompe
+                        bool newCommand = !currentPumpCommand;
+                        if (newCommand && currentLevel == LEVEL_FULL) {
+                            Serial.println("Manual start inhibited: reservoir is full.");
+                        } else {
+                            triggerPumpCommand(newCommand);
+                            Serial.printf("Manual command: Pump %s\n", newCommand ? "ON" : "OFF");
+                        }
+                        wasInManualMode = false; // La prochaine pression sera pour sortir du mode manuel
                     } else {
-                        triggerPumpCommand(newCommand);
+                        // On était déjà en mode manuel et on a déjà agi, donc on retourne en AUTO
+                        currentMode = AUTO;
+                        wasInManualMode = false;
+                        Serial.println("Mode switched back to AUTO.");
                     }
                 }
                 saveOperationalConfig();
