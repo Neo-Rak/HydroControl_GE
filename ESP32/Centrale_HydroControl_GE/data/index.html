@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HydroControl-GE Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" type="text/css" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Tableau de Bord HydroControl-GE</h1>
+
+        <div class="card">
+            <h2>Statut des Noeuds</h2>
+            <table id="nodes-table">
+                <thead>
+                    <tr>
+                        <th>Nom</th>
+                        <th>ID du Noeud</th>
+                        <th>Type</th>
+                        <th>Statut</th>
+                        <th>RSSI (dBm)</th>
+                        <th>Derni&egrave;re Vue</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="nodes-tbody">
+                    <!-- Les données seront insérées ici par JavaScript -->
+                </tbody>
+            </table>
+        </div>
+
+        <div class="card">
+            <h2>Assignation Puits / R&eacute;servoir</h2>
+            <form id="assign-form">
+                <label for="reservoir">R&eacute;servoir (AquaReservPro):</label>
+                <select name="reservoir" id="reservoir_select"></select>
+
+                <label for="well">Puits (WellguardPro):</label>
+                <select name="well" id="well_select"></select>
+
+                <button type="submit">Assigner</button>
+            </form>
+            <div id="assign-status"></div>
+        </div>
+
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
