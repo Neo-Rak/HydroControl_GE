@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WellguardPro Status</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .status { margin-bottom: 10px; }
+        .label { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Statut WellguardPro</h1>
+    <div id="status-container">
+        <!-- Les données seront chargées ici -->
+    </div>
+
+    <script>
+        function updateStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    const container = document.getElementById('status-container');
+                    container.innerHTML = `
+                        <div class="status"><span class="label">ID du Module:</span> ${data.id}</div>
+                        <div class="status"><span class="label">&Eacute;tat du Relais:</span> ${data.relay_state}</div>
+                        <div class="status"><span class="label">Dernier RSSI:</span> ${data.last_rssi} dBm</div>
+                    `;
+                });
+        }
+        setInterval(updateStatus, 2500);
+        updateStatus();
+    </script>
+</body>
+</html>

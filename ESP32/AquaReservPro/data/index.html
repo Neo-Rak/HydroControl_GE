@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>AquaReservPro Status</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .status { margin-bottom: 10px; }
+        .label { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <h1>Statut AquaReservPro</h1>
+    <div id="status-container">
+        <!-- Les données seront chargées ici -->
+    </div>
+
+    <script>
+        function updateStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    const container = document.getElementById('status-container');
+                    container.innerHTML = `
+                        <div class="status"><span class="label">ID du Module:</span> ${data.id}</div>
+                        <div class="status"><span class="label">Niveau d'Eau:</span> ${data.level}</div>
+                        <div class="status"><span class="label">Mode:</span> ${data.mode}</div>
+                        <div class="status"><span class="label">Commande Pompe:</span> ${data.pump_command}</div>
+                        <div class="status"><span class="label">Puits Assign&eacute;:</span> ${data.assigned_well}</div>
+                    `;
+                });
+        }
+        setInterval(updateStatus, 2500);
+        updateStatus();
+    </script>
+</body>
+</html>
