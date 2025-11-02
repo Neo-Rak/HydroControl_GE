@@ -5,6 +5,7 @@
 #include "LittleFS.h"
 #include "WatchdogManager.h"
 #include "LedManager.h"
+#include "Constants.h"
 
 CentraleLogic* CentraleLogic::instance = nullptr;
 
@@ -21,9 +22,9 @@ void CentraleLogic::initialize() {
 
     // --- Connect to Wi-Fi ---
     Preferences prefs;
-    prefs.begin("network_config", true);
-    String ssid = prefs.getString("ssid", "");
-    String password = prefs.getString("password", "");
+    prefs.begin(PREFS_NAMESPACE_NETWORK, true);
+    String ssid = prefs.getString(PREFS_KEY_SSID, "");
+    String password = prefs.getString(PREFS_KEY_PASSWORD, "");
     prefs.end();
 
     if (ssid.length() > 0) {
@@ -74,8 +75,8 @@ void CentraleLogic::setupLoRa() {
     }
 
     Preferences prefs;
-    prefs.begin("security_config", true);
-    String psk = prefs.getString("lora_psk", "");
+    prefs.begin(PREFS_NAMESPACE_SECURITY, true);
+    String psk = prefs.getString(PREFS_KEY_LORA_PSK, "");
     prefs.end();
 
     if (psk.length() == 16) {
@@ -242,7 +243,10 @@ void CentraleLogic::registerOrUpdateNode(const String& id, NodeRole role, const 
             nodeList[existingNodeIndex].rssi = rssi;
             nodeList[existingNodeIndex].status = status;
             nodeList[existingNodeIndex].pumpState = pumpState;
-            if (role != ROLE_UNKNOWN) nodeList[existingNodeIndex].type = role;
+            // Ne mettez à jour le rôle que s'il est spécifiquement fourni (pas UNKNOWN)
+            if (role != ROLE_UNKNOWN) {
+                nodeList[existingNodeIndex].type = role;
+            }
         } else if (nodeCount < MAX_NODES) { // Add new node
             nodeList[nodeCount].id = id;
             nodeList[nodeCount].name = ""; // Initialiser le nom à une chaîne vide
@@ -328,7 +332,7 @@ String CentraleLogic::getSystemStatusJson() {
 
 void CentraleLogic::saveNodeName(const String& nodeId, const String& nodeName) {
     Preferences prefs;
-    prefs.begin("node-names", false);
+    prefs.begin(PREFS_NAMESPACE_NODE_NAMES, false);
     prefs.putString(nodeId.c_str(), nodeName);
     prefs.end();
 }

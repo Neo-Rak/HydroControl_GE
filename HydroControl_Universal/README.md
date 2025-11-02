@@ -1,105 +1,70 @@
-# HydroControl-GE Universal Firmware
+# HydroControl-GE: Firmware Industriel Universel v3.1.0
 
-Version: 3.0.0
+## 1. Vue d'ensemble
 
-## 1. Introduction
+Ce document détaille le firmware universel pour le système de gestion de l'eau **HydroControl-GE**. Conçu pour une fiabilité maximale dans des environnements exigeants, ce firmware unique s'installe sur tous les modules matériels ESP32 et se configure dynamiquement pour l'un des trois rôles critiques du système.
 
-Ce document décrit le firmware universel pour le système d'irrigation intelligent **HydroControl-GE**. Ce firmware est conçu pour fonctionner sur un module ESP32 unique et peut être configuré pour endosser l'un des trois rôles distincts au sein de l'écosystème :
+- **Centrale** : Le centre de commandement et de supervision. Elle orchestre les modules, gère l'accès aux ressources partagées (pompes de puits) pour éviter les conflits, et expose une interface web pour le monitoring en temps réel.
+- **AquaReserv Pro** : Module de contrôle de réservoir. Il mesure le niveau d'eau, commande une pompe de remplissage, et gère un mode de fonctionnement manuel. Il communique avec la Centrale pour les ressources partagées ou directement avec un `Wellguard Pro` pour les ressources dédiées.
+- **Wellguard Pro** : Module actionneur sécurisé pour une pompe de puits. Il exécute les commandes de pompage reçues via le réseau LoRa crypté.
 
-- **Centrale** : Le cerveau du système. Elle coordonne les actions des autres modules, fournit une interface utilisateur web pour la supervision, et gère les ressources partagées (comme les pompes de puits) pour éviter les conflits.
-- **AquaReserv Pro** : Un module de contrôle de réservoir. Il surveille le niveau d'eau d'un réservoir et commande une pompe pour le remplir depuis un puits. Il peut fonctionner de manière autonome pour les ressources dédiées ou demander l'accès à une ressource partagée via la Centrale.
-- **Wellguard Pro** : Un module actionneur pour une pompe de puits. Il reçoit des commandes directes (cryptées) pour activer ou désactiver la pompe.
+L'épine dorsale du système est une communication sans fil LoRa longue portée, sécurisée par un cryptage AES-128 de bout en bout.
 
-L'architecture repose sur une communication sans fil robuste et sécurisée via LoRa, avec un cryptage AES-128 pour garantir la confidentialité et l'intégrité des commandes.
+## 2. Architecture et Philosophie de Conception
 
-## 2. Architecture Logique
+Le firmware est construit sur le **framework Arduino avec FreeRTOS**, ce qui permet une gestion multitâche préemptive, essentielle pour garantir la réactivité et la fiabilité du système.
 
-Le firmware est construit sur le framework Arduino avec FreeRTOS pour une gestion multitâche robuste, essentielle dans un contexte industriel.
+### 2.1. Principes Clés
 
-### 2.1. Structure du Projet
+- **Firmware Unique** : Un seul binaire pour tous les appareils simplifie radicalement la fabrication, le déploiement et la maintenance.
+- **Robustesse** : Chaque opération critique (communication, lecture de capteur) est gérée dans une tâche FreeRTOS dédiée pour éviter tout blocage. Un watchdog matériel prévient les blocages système.
+- **Sécurité** : Les communications LoRa sont cryptées avec AES-128 et une clé pré-partagée de 16 octets, empêchant toute commande non autorisée.
+- **Découverte Automatique** : Les modules se découvrent automatiquement sur le réseau, simplifiant l'ajout de nouveaux appareils.
 
-Le projet est organisé de manière modulaire pour faciliter la maintenance et l'évolution :
+### 2.2. Structure du Projet (v3.1.0)
 
-- `src/main.cpp` : Le point d'entrée qui orchestre le chargement du rôle de l'appareil.
-- `lib/` : Contient les bibliothèques locales, organisées par fonctionnalité :
-    - `HGE_Crypto` : Gestion du cryptage/décryptage AES.
-    - `HGE_Network` : Couche d'abstraction pour la communication LoRa et le provisionnement Wi-Fi.
-    - `HGE_Roles` : Logique métier spécifique à chaque rôle (Centrale, AquaReserv, Wellguard).
-    - `HGE_System` : Modules système de bas niveau, comme le `RoleManager` qui gère la persistance du rôle.
-- `data/` : Contient les fichiers de l'interface web (HTML, CSS, JS) servis par l'ESP32.
-- `platformio.ini` : Fichier de configuration du projet PlatformIO.
+Le projet est organisé pour une modularité et une maintenabilité maximales :
 
-### 2.2. Communication
+- `src/main.cpp` : Point d'entrée qui lit le rôle configuré et lance la logique appropriée.
+- `lib/` : Contient les bibliothèques logicielles internes :
+    - `HGE_Comm` : Code de communication commun (format des messages, cryptage).
+    - `HGE_Central` : Logique métier spécifique à la `Centrale`.
+    - `HGE_Roles` : Logique pour les modules de terrain (`AquaReservLogic`, `WellguardLogic`).
+    - `HGE_System` : Modules système transversaux (gestion des LEDs, du watchdog, du rôle).
+- `data/` : Fichiers de l'interface web (HTML, CSS, JS) servis par la `Centrale` ou pour le provisionnement.
+- `platformio.ini` : Fichier de configuration PlatformIO qui gère les dépendances et les paramètres de compilation.
 
-- **LoRa** : Utilisé pour la communication principale entre les modules en raison de sa longue portée et de sa faible consommation. Le protocole est défini dans `lib/HGE_Network/Message.h`.
-- **Wi-Fi** : Utilisé uniquement lors de la phase de provisionnement initial. Un nouveau module démarre en mode point d'accès (AP) et sert une page web pour la configuration.
-- **Sécurité** : Toutes les communications LoRa sont cryptées de bout en bout avec AES-128 et une clé pré-partagée.
+## 3. Brochage Matériel Universel et Câblage
 
-## 3. Fonctionnalités Clés
+Pour standardiser la production, tous les modules HydroControl-GE partagent **le même brochage physique**. Le firmware active uniquement les broches nécessaires au rôle configuré.
 
-- **Firmware Universel** : Un seul binaire pour tous les appareils, simplifiant le déploiement.
-- **Provisionnement Simplifié** : Configuration initiale facile via une interface web sur le point d'accès Wi-Fi de l'appareil.
-- **Haute Fiabilité** : Utilisation de FreeRTOS pour des opérations non bloquantes, et un mécanisme d'acquittement (ACK) pour les commandes critiques.
-- **Sécurité Industrielle** : Cryptage AES-128 pour toutes les communications.
-- **Arbitrage des Ressources** : La Centrale gère l'accès aux ressources partagées (pompes) pour éviter les conflits et les dommages matériels.
-- **Interface de Supervision** : La Centrale offre un dashboard web pour visualiser l'état de l'ensemble du système en temps réel.
-
-## 4. Diagnostic Visuel par LEDs
-
-Tous les modules sont équipés d'un système de diagnostic visuel utilisant trois LEDs indépendantes (Rouge, Verte, Jaune) pour fournir un retour instantané sur l'état du système.
-
-| Combinaison de LEDs                   | Signification                                      |
-| ------------------------------------- | -------------------------------------------------- |
-| **Jaune, clignotement lent**          | Démarrage en cours (Booting)                       |
-| **Vert, fixe**                        | Système opérationnel, inactif (System OK)          |
-| **Vert, clignotement lent**           | Action normale en cours (ex: pompe activée)        |
-| **Jaune et Vert, alterné**            | Mode configuration (Setup Mode)                    |
-| **Vert fixe + flash Jaune**           | Activité réseau (LoRa TX/RX)                       |
-| **Jaune, fixe**                       | Avertissement (Warning), condition anormale        |
-| **Rouge, clignotement rapide**        | Erreur Critique (Critical Error)                   |
-| **Toutes éteintes**                   | Module non alimenté ou état OFF                    |
-
-## 5. Brochage Matériel Universel
-
-Pour simplifier la production et l'installation, tous les modules HydroControl-GE partagent **exactement le même câblage**. Le firmware active les broches nécessaires en fonction du rôle configuré.
-
-### 5.1. Brochage Commun (pour tous les modules)
+### 3.1. Brochage Commun (pour tous les modules)
 
 | Périphérique      | Broche ESP32 |
 | ----------------- | ------------ |
 | LoRa `SCK`        | `GPIO 18`    |
 | LoRa `MISO`       | `GPIO 19`    |
 | LoRa `MOSI`       | `GPIO 23`    |
-| LoRa `NSS`        | `GPIO 5`     |
+| LoRa `NSS` / `CS` | `GPIO 5`     |
 | LoRa `RST`        | `GPIO 14`    |
 | LoRa `DIO0`       | `GPIO 2`     |
 | LED Rouge         | `GPIO 15`    |
 | LED Verte         | `GPIO 16`    |
 | LED Jaune         | `GPIO 17`    |
 
-### 5.2. Brochage Spécifique au Rôle
+### 3.2. Brochage Spécifique au Rôle ("ROLE_PIN")
 
-Les broches suivantes doivent être câblées en fonction du rôle le plus complexe que le module pourrait avoir à remplir.
+Ces broches sont câblées en fonction du rôle le plus complexe (ici, `AquaReserv Pro`).
 
 | Broche      | Rôle : `AquaReserv Pro`        | Rôle : `Wellguard Pro`     | Rôle : `Centrale` |
 | ----------- | ------------------------------ | -------------------------- | ----------------- |
-| **`GPIO 25`** | Capteur Niveau Haut (Entrée)   | Commande Relais (Sortie)   | Non utilisé      |
-| **`GPIO 26`** | Capteur Niveau Bas (Entrée)    | Défaut Matériel (Entrée)   | Non utilisé      |
+| **`GPIO 25`** | Capteur Niveau Haut (Entrée)   | Non utilisé                | Non utilisé      |
+| **`GPIO 26`** | Capteur Niveau Bas (Entrée)    | Commande Relais (Sortie)   | Non utilisé      |
 | **`GPIO 27`** | Bouton Manuel (Entrée)         | Non utilisé                | Non utilisé      |
 
-### 5.3. Instructions de Câblage
+### 3.3. Schémas de Câblage Détaillés
 
-- **Pour `AquaReserv Pro`**:
-  - Connectez les capteurs de niveau haut et bas (logique `INPUT_PULLUP`, l'autre fil à `GND`).
-  - Connectez le bouton manuel (logique `INPUT_PULLUP`, l'autre fil à `GND`).
-- **Pour `Wellguard Pro`**:
-  - Connectez la commande du module relais.
-  - Connectez le capteur de défaut externe (logique `INPUT_PULLUP`, l'autre fil à `GND`).
-- **Pour la `Centrale`**:
-  - Aucun câblage supplémentaire n'est requis.
-
-## 6. Schémas de Câblage
-
+**Module LoRa (SX127x) vers ESP32 DevKit V1:**
 ```
 ESP32 DevKit V1      Module LoRa (SX127x)
 -----------------------------------------
@@ -113,47 +78,71 @@ GPIO 14 ------------- RST
 GPIO 2 -------------- DIO0
 ```
 
-### 5.2. Câblage Spécifique AquaReserv Pro
+**Instructions de câblage pour `AquaReserv Pro`:**
+- **Capteurs à flotteur** : Connectez une borne de chaque capteur à `GND`. Connectez l'autre borne aux GPIOs correspondantes (`GPIO 25` pour le niveau haut, `GPIO 26` pour le niveau bas). Le firmware utilise les résistances de PULL-UP internes.
+- **Bouton Manuel** : Connectez une borne du bouton poussoir à `GND` et l'autre à `GPIO 27`.
 
-- **Capteurs à flotteur** : Connectez la broche de signal de chaque capteur à la GPIO correspondante. L'autre broche du capteur doit être connectée à la masse (GND). Le pull-up interne de l'ESP32 est utilisé.
-- **Relais** : Connectez la broche de commande du module relais à la GPIO 27. Alimentez le module relais en 5V et GND depuis l'ESP32 (si le module le permet) ou une source externe.
+**Instructions de câblage pour `Wellguard Pro`:**
+- **Module Relais** : Connectez la broche de commande (`IN`) du module relais à `GPIO 26`. Alimentez le module relais (`VCC`, `GND`) depuis une source 5V appropriée.
 
-### 5.3. Câblage Spécifique Wellguard Pro
+## 4. Diagnostic Visuel par LEDs
 
-- **Relais** : Connectez la broche de commande du module relais à la GPIO 27. Alimentez le module relais en 5V et GND.
+Le système de LEDs fournit un état instantané du module.
 
-## 6. Compilation et Téléversement
+| Combinaison de LEDs                   | Signification                                      |
+| ------------------------------------- | -------------------------------------------------- |
+| **Jaune, clignotement lent**          | Démarrage en cours (Booting)                       |
+| **Vert, fixe**                        | Système OK, en attente.                            |
+| **Vert, clignotement lent**           | Action en cours (ex: pompe activée).               |
+| **Jaune et Vert, alterné**            | Mode Provisionnement / Configuration.              |
+| **Flash Jaune rapide**                | Activité LoRa (Réception/Transmission).            |
+| **Jaune, fixe**                       | Avertissement (ex: capteur en état incohérent).    |
+| **Rouge, clignotement rapide**        | Erreur Critique (ex: LoRa non détecté).            |
 
-Le projet est conçu pour être compilé avec PlatformIO.
+## 5. Installation et Déploiement
 
-### 6.1. Prérequis
+### 5.1. Prérequis
 
-1. **Visual Studio Code** avec l'extension **PlatformIO IDE**.
-2. Ou, la **PlatformIO Core (CLI)** installée (`pip install platformio`).
+1.  **Visual Studio Code** avec l'extension **PlatformIO IDE**.
+2.  Ou, la **PlatformIO Core (CLI)** : `pip install platformio`.
 
-### 6.2. Procédure
+### 5.2. Compilation et Téléversement
 
-1. **Clonez le projet** depuis le dépôt Git.
-2. **Ouvrez le dossier `HydroControl_Universal`** dans Visual Studio Code ou dans votre terminal.
-3. **Compilation** :
-   - Dans VSCode : Cliquez sur l'icône PlatformIO dans la barre de gauche, puis sous "Project Tasks", choisissez "Build".
-   - En CLI : Exécutez la commande `platformio run -d HydroControl_Universal/`
-4. **Téléversement** :
-   - Connectez votre module ESP32 en USB.
-   - Dans VSCode : Cliquez sur "Upload".
-   - En CLI : Exécutez la commande `platformio run --target upload -d HydroControl_Universal/`
+1.  Clonez ce dépôt.
+2.  Ouvrez le dossier `HydroControl_Universal` dans VS Code ou votre terminal.
+3.  **Compilation** : `platformio run -d HydroControl_Universal/`
+4.  **Téléversement** : Connectez l'ESP32 et exécutez `platformio run --target upload -d HydroControl_Universal/`
 
-### 6.3. Provisionnement d'un nouveau module
+### 5.3. Provisionnement d'un Nouveau Module
 
-Après le premier téléversement, le module démarrera en mode "UNPROVISIONED".
+Tout nouveau module doit être configuré :
 
-1. Avec votre téléphone ou ordinateur, cherchez les réseaux Wi-Fi et connectez-vous au point d'accès **`HydroControl-Setup`**.
-2. Une fois connecté, un portail captif devrait s'ouvrir. Sinon, ouvrez un navigateur et allez à l'adresse `http://192.168.4.1`.
-3. Sur la page web, configurez :
-   - Le **rôle** de l'appareil (Centrale, AquaReserv, ou Wellguard).
-   - Les **identifiants Wi-Fi** de votre réseau local (SSID/Mot de passe).
-   - La **clé de cryptage AES** (doit être la même pour tous les modules).
-4. Sauvegardez la configuration. Le module redémarrera et adoptera son nouveau rôle.
+1.  À la première mise sous tension, le module crée un point d'accès Wi-Fi nommé **`HydroControl-Setup`**.
+2.  Connectez-vous à ce réseau avec un téléphone ou un ordinateur.
+3.  Ouvrez un navigateur et allez à l'adresse `http://192.168.4.1`.
+4.  Depuis l'interface web, configurez :
+    -   Le **Rôle** de l'appareil (`Centrale`, `AquaReserv Pro`, `Wellguard Pro`).
+    -   Les **identifiants de votre réseau Wi-Fi** (SSID & mot de passe) - *Nécessaire uniquement pour la Centrale*.
+    -   La **Clé de Cryptage LoRa (PSK)** : une chaîne de **16 caractères exactement**, qui doit être identique sur tous les modules du réseau.
+5.  Sauvegardez. Le module redémarre dans son rôle opérationnel.
+
+## 6. Dépannage (Troubleshooting)
+
+- **Un module n'apparaît pas sur l'interface de la Centrale** :
+    1.  Vérifiez que la clé de cryptage LoRa (PSK) est identique sur la Centrale et le module.
+    2.  Vérifiez le câblage du module LoRa.
+    3.  Assurez-vous que l'antenne est correctement connectée.
+    4.  Observez les LEDs : un flash jaune indique une communication. S'il n'y en a jamais, le problème est probablement matériel.
+
+- **Le module redémarre en boucle** :
+    1.  Ceci est souvent causé par le watchdog. Cela signifie qu'une tâche est bloquée.
+    2.  Connectez le module à un ordinateur et ouvrez le moniteur série (`platformio device monitor`) pour voir les messages d'erreur.
+    3.  Cela peut être dû à une alimentation électrique instable. Assurez-vous d'utiliser une alimentation de qualité.
+
+- **Impossible de se connecter au Wi-Fi de provisionnement** :
+    1.  Rapprochez-vous du module.
+    2.  Essayez de "Oublier" le réseau sur votre appareil et de vous reconnecter.
+    3.  Redémarrez le module HydroControl.
 
 ---
-_Documentation générée par Jules, Ingénieur Logiciel._
+_Documentation Technique v3.1.0 - Maintenue par Jules, Ingénieur Logiciel._

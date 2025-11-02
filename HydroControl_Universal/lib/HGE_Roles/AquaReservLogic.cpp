@@ -5,6 +5,7 @@
 #include <ArduinoJson.h>
 #include "WatchdogManager.h"
 #include "LedManager.h"
+#include "Constants.h"
 
 AquaReservLogic* AquaReservLogic::instance = nullptr;
 
@@ -37,19 +38,19 @@ void AquaReservLogic::initialize() {
 
 void AquaReservLogic::loadOperationalConfig() {
     Preferences prefs;
-    prefs.begin("hydro_config", true);
-    assignedWellId = prefs.getString("assigned_well", "");
-    isWellShared = prefs.getBool("is_well_shared", false);
-    currentMode = (OperatingMode)prefs.getUChar("op_mode", AUTO);
+    prefs.begin(PREFS_NAMESPACE_OPERATIONAL, true);
+    assignedWellId = prefs.getString(PREFS_KEY_ASSIGNED_WELL, "");
+    isWellShared = prefs.getBool(PREFS_KEY_IS_WELL_SHARED, false);
+    currentMode = (OperatingMode)prefs.getUChar(PREFS_KEY_OP_MODE, AUTO);
     prefs.end();
 }
 
 void AquaReservLogic::saveOperationalConfig() {
     Preferences prefs;
-    prefs.begin("hydro_config", false);
-    prefs.putString("assigned_well", assignedWellId);
-    prefs.putBool("is_well_shared", isWellShared);
-    prefs.putUChar("op_mode", (unsigned char)currentMode);
+    prefs.begin(PREFS_NAMESPACE_OPERATIONAL, false);
+    prefs.putString(PREFS_KEY_ASSIGNED_WELL, assignedWellId);
+    prefs.putBool(PREFS_KEY_IS_WELL_SHARED, isWellShared);
+    prefs.putUChar(PREFS_KEY_OP_MODE, (unsigned char)currentMode);
     prefs.end();
     Serial.println("Operational config saved.");
 }
@@ -85,9 +86,6 @@ void AquaReservLogic::setupLoRa() {
     LoRa.onReceive(onReceive);
     LoRa.receive();
     Serial.println("LoRa receiver started.");
-
-    String discoveryPacket = LoRaMessage::serializeDiscovery(deviceId.c_str(), ROLE_AQUA_RESERV_PRO);
-    sendLoRaMessage(discoveryPacket);
 }
 
 void AquaReservLogic::startTasks() {
@@ -234,22 +232,33 @@ void AquaReservLogic::Task_GPIO_Handler(void *pvParameters) {
 
 void AquaReservLogic::Task_Status_Reporter(void *pvParameters) {
     AquaReservLogic* self = (AquaReservLogic*)pvParameters;
-    const int HEARTBEAT_INTERVAL_MS = 120000;
+    const int DISCOVERY_INTERVAL_MS = 30000;  // 30 seconds for discovery
+    const int HEARTBEAT_INTERVAL_MS = 120000; // 2 minutes for heartbeat
+
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS));
+        if (self->isProvisioned) {
+            vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS));
+            // "Intelligent heartbeat": only send if no other communication happened recently
+            if (millis() - self->lastLoRaTransmissionTimestamp < HEARTBEAT_INTERVAL_MS) {
+                continue;
+            }
 
-        if (millis() - self->lastLoRaTransmissionTimestamp < HEARTBEAT_INTERVAL_MS) {
-            continue;
+            const char* levelStr = "UNKNOWN";
+            if(self->currentLevel == LEVEL_FULL) levelStr = "FULL";
+            else if(self->currentLevel == LEVEL_OK) levelStr = "OK";
+            else if(self->currentLevel == LEVEL_EMPTY) levelStr = "EMPTY";
+            else if(self->currentLevel == LEVEL_ERROR) levelStr = "ERROR";
+
+            String statusPacket = LoRaMessage::serializeStatusUpdate(self->deviceId.c_str(), levelStr, self->currentPumpCommand, LoRa.packetRssi());
+            sendLoRaMessage(statusPacket);
+
+        } else {
+            // Send discovery packet periodically until provisioned
+            vTaskDelay(pdMS_TO_TICKS(DISCOVERY_INTERVAL_MS));
+            String discoveryPacket = LoRaMessage::serializeDiscovery(self->deviceId.c_str(), ROLE_AQUA_RESERV_PRO);
+            sendLoRaMessage(discoveryPacket);
+            Serial.println("Sent discovery packet to Centrale.");
         }
-
-        const char* levelStr = "UNKNOWN";
-        if(self->currentLevel == LEVEL_FULL) levelStr = "FULL";
-        else if(self->currentLevel == LEVEL_OK) levelStr = "OK";
-        else if(self->currentLevel == LEVEL_EMPTY) levelStr = "EMPTY";
-        else if(self->currentLevel == LEVEL_ERROR) levelStr = "ERROR";
-
-        String statusPacket = LoRaMessage::serializeStatusUpdate(self->deviceId.c_str(), levelStr, self->currentPumpCommand, LoRa.packetRssi());
-        sendLoRaMessage(statusPacket);
     }
 }
 
@@ -293,6 +302,7 @@ void AquaReservLogic::handleLoRaPacket(const String& packet) {
             if (cmd != nullptr && strcmp(cmd, "ASSIGN_WELL") == 0) {
                 instance->assignedWellId = doc["well_id"].as<String>();
                 instance->isWellShared = doc["is_shared"].as<bool>();
+                instance->isProvisioned = true; // Mark as provisioned by the Centrale
                 Serial.printf("Received new well assignment: %s (Shared: %s)\n", instance->assignedWellId.c_str(), instance->isWellShared ? "Yes" : "No");
                 instance->saveOperationalConfig();
             }
