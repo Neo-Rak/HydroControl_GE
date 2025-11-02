@@ -332,7 +332,7 @@ void CentraleLogic::saveNodeName(const String& nodeId, const String& nodeName) {
 
 String CentraleLogic::loadNodeName(const String& nodeId) {
     Preferences prefs;
-    prefs.begin("node-names", true);
+    prefs.begin("node-names", false); // Open in read-write mode to create if not exists
     String name = prefs.getString(nodeId.c_str(), "");
     prefs.end();
     return name;
