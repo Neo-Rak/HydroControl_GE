@@ -11,7 +11,7 @@ public:
 
 private:
     static uint8_t aesKey[16];
-    // Initialization Vector (IV) - must be 16 bytes
+    // Define a static IV. IMPORTANT: This must be the same across all devices.
     static uint8_t iv[16];
     static AESLib aesLib;
 };

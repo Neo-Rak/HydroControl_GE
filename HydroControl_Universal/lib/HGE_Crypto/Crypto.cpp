@@ -21,8 +21,6 @@ void hex_string_to_bytes(const String& hex, byte* bytes) {
 
 
 uint8_t CryptoManager::aesKey[16];
-// Define a static IV. IMPORTANT: For production, this should be unique per message
-// for maximum security (e.g., derived from a counter), but for this project, a static IV is acceptable.
 uint8_t CryptoManager::iv[16] = { 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f };
 
 AESLib CryptoManager::aesLib;
