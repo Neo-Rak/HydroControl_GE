@@ -54,14 +54,16 @@ void AquaReservLogic::saveOperationalConfig() {
 
 
 void AquaReservLogic::setupHardware() {
-    pinMode(ARP_LEVEL_SENSOR_PIN, INPUT_PULLUP);
-    pinMode(ARP_BUTTON_PIN, INPUT_PULLUP);
+    // Initialisation des broches pour les capteurs de niveau
+    pinMode(AQUA_RESERV_LEVEL_HIGH_PIN, INPUT_PULLUP);
+    pinMode(AQUA_RESERV_LEVEL_LOW_PIN, INPUT_PULLUP);
+    pinMode(AQUA_RESERV_BUTTON_PIN, INPUT_PULLUP);
 }
 
 void AquaReservLogic::setupLoRa() {
-    SPI.begin();
-    LoRa.setPins(ARP_LORA_SS_PIN, ARP_LORA_RST_PIN, ARP_LORA_DIO0_PIN);
-    if (!LoRa.begin(ARP_LORA_FREQ)) {
+    SPI.begin(LORA_SCK_PIN, LORA_MISO_PIN, LORA_MOSI_PIN);
+    LoRa.setPins(LORA_SS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
+    if (!LoRa.begin(433E6)) { // Fréquence 433 MHz
         Serial.println("Starting LoRa failed!");
         while (1);
     }
@@ -119,11 +121,26 @@ void AquaReservLogic::triggerPumpCommand(bool command) {
 
 void AquaReservLogic::Task_Sensor_Handler(void *pvParameters) {
     AquaReservLogic* self = (AquaReservLogic*)pvParameters;
-    LevelState lastUnstableLevel = LEVEL_UNKNOWN;
+    LevelState lastUnstableLevel = self->currentLevel;
     unsigned long levelChangeTimestamp = 0;
+
     for (;;) {
-        bool rawValue = digitalRead(ARP_LEVEL_SENSOR_PIN);
-        LevelState detectedLevel = (rawValue == LOW) ? LEVEL_FULL : LEVEL_EMPTY;
+        // Lecture des capteurs. Rappel : INPUT_PULLUP, donc LOW = activé.
+        bool highSensorActive = (digitalRead(AQUA_RESERV_LEVEL_HIGH_PIN) == LOW);
+        bool lowSensorActive = (digitalRead(AQUA_RESERV_LEVEL_LOW_PIN) == LOW);
+
+        LevelState detectedLevel;
+
+        if (highSensorActive && lowSensorActive) {
+            detectedLevel = LEVEL_FULL;
+        } else if (!highSensorActive && !lowSensorActive) {
+            detectedLevel = LEVEL_EMPTY;
+        } else if (!highSensorActive && lowSensorActive) {
+            detectedLevel = LEVEL_OK;
+        } else { // highSensorActive && !lowSensorActive
+            // État incohérent : le capteur haut est actif mais pas le bas.
+            detectedLevel = LEVEL_ERROR;
+        }
 
         if (detectedLevel != lastUnstableLevel) {
             lastUnstableLevel = detectedLevel;
@@ -133,7 +150,12 @@ void AquaReservLogic::Task_Sensor_Handler(void *pvParameters) {
         if (millis() - levelChangeTimestamp > SENSOR_STABILITY_MS) {
             if (self->currentLevel != detectedLevel) {
                 self->currentLevel = detectedLevel;
-                Serial.printf("New stable level: %s\n", self->currentLevel == LEVEL_FULL ? "FULL" : "EMPTY");
+                const char* levelStr = "UNKNOWN";
+                if(self->currentLevel == LEVEL_FULL) levelStr = "FULL";
+                else if(self->currentLevel == LEVEL_OK) levelStr = "OK";
+                else if(self->currentLevel == LEVEL_EMPTY) levelStr = "EMPTY";
+                else if(self->currentLevel == LEVEL_ERROR) levelStr = "ERROR";
+                Serial.printf("New stable level: %s\n", levelStr);
             }
         }
         vTaskDelay(pdMS_TO_TICKS(250));
@@ -142,16 +164,22 @@ void AquaReservLogic::Task_Sensor_Handler(void *pvParameters) {
 
 void AquaReservLogic::Task_Control_Logic(void *pvParameters) {
     AquaReservLogic* self = (AquaReservLogic*)pvParameters;
-    bool lastPumpCommandState = !self->currentPumpCommand;
+
     for (;;) {
         if (self->currentMode == AUTO) {
             bool desiredCommand = self->currentPumpCommand;
-            if (self->currentLevel == LEVEL_EMPTY) desiredCommand = true;
-            else if (self->currentLevel == LEVEL_FULL) desiredCommand = false;
 
-            if (desiredCommand != lastPumpCommandState) {
+            // Logique de contrôle basée sur les niveaux
+            if (self->currentLevel == LEVEL_EMPTY) {
+                desiredCommand = true; // Demander le démarrage
+            } else if (self->currentLevel == LEVEL_FULL) {
+                desiredCommand = false; // Demander l'arrêt
+            }
+            // Si le niveau est OK, on ne change rien à la commande en cours.
+
+            // On envoie la commande seulement si elle change
+            if (desiredCommand != self->currentPumpCommand) {
                 self->triggerPumpCommand(desiredCommand);
-                lastPumpCommandState = desiredCommand;
             }
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -165,7 +193,7 @@ void AquaReservLogic::Task_GPIO_Handler(void *pvParameters) {
     const int debounceDelay = 50;
 
     for (;;) {
-        int buttonState = digitalRead(ARP_BUTTON_PIN);
+        int buttonState = digitalRead(AQUA_RESERV_BUTTON_PIN);
         if (buttonState != lastButtonState) {
             lastDebounceTime = millis();
         }
@@ -201,8 +229,13 @@ void AquaReservLogic::Task_Status_Reporter(void *pvParameters) {
             continue;
         }
 
-        String levelStr = (self->currentLevel == LEVEL_FULL) ? "FULL" : "EMPTY";
-        String statusPacket = LoRaMessage::serializeStatusUpdate(self->deviceId.c_str(), levelStr.c_str(), LoRa.packetRssi());
+        const char* levelStr = "UNKNOWN";
+        if(self->currentLevel == LEVEL_FULL) levelStr = "FULL";
+        else if(self->currentLevel == LEVEL_OK) levelStr = "OK";
+        else if(self->currentLevel == LEVEL_EMPTY) levelStr = "EMPTY";
+        else if(self->currentLevel == LEVEL_ERROR) levelStr = "ERROR";
+
+        String statusPacket = LoRaMessage::serializeStatusUpdate(self->deviceId.c_str(), levelStr, LoRa.packetRssi());
         sendLoRaMessage(statusPacket);
     }
 }
