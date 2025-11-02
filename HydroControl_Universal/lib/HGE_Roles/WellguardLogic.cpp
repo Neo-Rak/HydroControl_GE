@@ -26,17 +26,15 @@ void WellguardLogic::initialize() {
 }
 
 void WellguardLogic::setupHardware() {
-    pinMode(WGP_RELAY_PIN, OUTPUT);
-    digitalWrite(WGP_RELAY_PIN, LOW);
-    // Other hardware setup like LEDs will be handled by a common LEDManager
+    pinMode(WELLGUARD_RELAY_PIN, OUTPUT);
+    digitalWrite(WELLGUARD_RELAY_PIN, LOW);
 }
 
 void WellguardLogic::setupLoRa() {
-    SPI.begin();
-    LoRa.setPins(WGP_LORA_SS_PIN, WGP_LORA_RST_PIN, WGP_LORA_DIO0_PIN);
-    if (!LoRa.begin(WGP_LORA_FREQ)) {
+    SPI.begin(LORA_SCK_PIN, LORA_MISO_PIN, LORA_MOSI_PIN);
+    LoRa.setPins(LORA_SS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
+    if (!LoRa.begin(433E6)) { // Fréquence 433 MHz
         Serial.println("Starting LoRa failed!");
-        // Trigger a critical error state via LEDManager
         while (1);
     }
 
@@ -121,7 +119,7 @@ void WellguardLogic::handleLoRaPacket(const String& packet) {
     }
 
     const char* targetId = doc["tgt"];
-    if (targetId == nullptr || instance->deviceId.equals(targetId)) {
+    if (targetId != nullptr && instance->deviceId.equals(targetId)) {
 
         int type = doc["type"];
         if (type == MessageType::COMMAND) {
@@ -140,7 +138,7 @@ void WellguardLogic::handleLoRaPacket(const String& packet) {
 
 void WellguardLogic::setRelayState(bool newState) {
     relayState = newState;
-    digitalWrite(WGP_RELAY_PIN, relayState ? HIGH : LOW);
+    digitalWrite(WELLGUARD_RELAY_PIN, relayState ? HIGH : LOW);
     Serial.printf("Relay state set to: %s\n", relayState ? "ON" : "OFF");
 
     String status = relayState ? "ON" : "OFF";

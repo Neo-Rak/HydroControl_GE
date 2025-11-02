@@ -1,19 +1,14 @@
 #include "CentraleLogic.h"
 #include <WiFi.h>
 #include <SPI.h>
-#include <LoRa.h>
-#include <ArduinoJson.h>
-#include <Preferences.h>
-#include <LittleFS.h>
 #include "Crypto.h"
+#include "LittleFS.h"
 
 CentraleLogic* CentraleLogic::instance = nullptr;
 
 // --- FreeRTOS Handles ---
 QueueHandle_t loraRxQueue_Centrale;
 SemaphoreHandle_t nodeListMutex_Centrale;
-#define LORA_RX_QUEUE_SIZE 10
-#define LORA_RX_PACKET_MAX_LEN 256
 
 CentraleLogic::CentraleLogic() : server(80), events("/events") {
     instance = this;
@@ -22,20 +17,14 @@ CentraleLogic::CentraleLogic() : server(80), events("/events") {
 void CentraleLogic::initialize() {
     Serial.println("Centrale Logic Initializing...");
 
-    nodeListMutex_Centrale = xSemaphoreCreateMutex();
-    loraRxQueue_Centrale = xQueueCreate(LORA_RX_QUEUE_SIZE, sizeof(char[LORA_RX_PACKET_MAX_LEN]));
+    // --- Connect to Wi-Fi ---
+    Preferences prefs;
+    prefs.begin("network_config", true);
+    String ssid = prefs.getString("ssid", "");
+    String password = prefs.getString("password", "");
+    prefs.end();
 
-    setupHardware();
-
-    // Load WiFi credentials from provisioning
-    Preferences netPrefs;
-    netPrefs.begin("network_config", true);
-    String ssid = netPrefs.getString("ssid", "");
-    String password = netPrefs.getString("password", "");
-    netPrefs.end();
-
-    if(ssid.length() > 0) {
-        WiFi.mode(WIFI_STA);
+    if (ssid.length() > 0) {
         WiFi.begin(ssid.c_str(), password.c_str());
         Serial.print("Connecting to WiFi...");
         int retries = 0;
@@ -44,17 +33,27 @@ void CentraleLogic::initialize() {
             Serial.print(".");
             retries++;
         }
-        if(WiFi.status() == WL_CONNECTED){
-            Serial.println("\nWiFi Connected. IP: " + WiFi.localIP().toString());
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("\nWiFi connected!");
+            Serial.print("IP Address: ");
+            Serial.println(WiFi.localIP());
         } else {
-            Serial.println("\nWiFi connection failed. Functionality will be limited.");
+            Serial.println("\nFailed to connect to WiFi. Web server will not be available.");
         }
     } else {
-        Serial.println("No WiFi credentials found.");
+        Serial.println("No WiFi credentials found. Web server will not be available.");
     }
+    // --- End Wi-Fi Connection ---
+
+    deviceId = WiFi.macAddress();
+    deviceId.replace(":", "");
+
+    loraRxQueue_Centrale = xQueueCreate(10, LORA_RX_PACKET_MAX_LEN);
+    nodeListMutex_Centrale = xSemaphoreCreateMutex();
 
     if(!LittleFS.begin()){
         Serial.println("An Error has occurred while mounting LittleFS");
+        return;
     }
 
     setupLoRa();
@@ -64,22 +63,18 @@ void CentraleLogic::initialize() {
     Serial.println("Centrale Logic Initialized.");
 }
 
-void CentraleLogic::setupHardware() {
-    // LEDs will be managed by a common manager
-}
-
 void CentraleLogic::setupLoRa() {
-    SPI.begin();
-    LoRa.setPins(CENTRALE_LORA_SS_PIN, CENTRALE_LORA_RST_PIN, CENTRALE_LORA_DIO0_PIN);
-    if (!LoRa.begin(CENTRALE_LORA_FREQ)) {
+    SPI.begin(LORA_SCK_PIN, LORA_MISO_PIN, LORA_MOSI_PIN);
+    LoRa.setPins(LORA_SS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
+    if (!LoRa.begin(433E6)) {
         Serial.println("Starting LoRa failed!");
         while (1);
     }
 
-    Preferences secPrefs;
-    secPrefs.begin("security_config", true);
-    String psk = secPrefs.getString("lora_psk", "");
-    secPrefs.end();
+    Preferences prefs;
+    prefs.begin("security_config", true);
+    String psk = prefs.getString("lora_psk", "");
+    prefs.end();
 
     if (psk.length() == 16) {
         CryptoManager::setKey((const uint8_t*)psk.c_str());
@@ -96,7 +91,7 @@ void CentraleLogic::setupLoRa() {
 void CentraleLogic::startTasks() {
     xTaskCreate(Task_LoRa_Handler, "LoRaHandler", 4096, this, 3, NULL);
     xTaskCreate(Task_Node_Janitor, "NodeJanitor", 2048, this, 1, NULL);
-    xTaskCreate(Task_SSE_Publisher, "SSEPublisher", 2048, this, 2, NULL);
+    xTaskCreate(Task_SSE_Publisher, "SSEPublisher", 4096, this, 2, NULL);
 }
 
 void CentraleLogic::setupWebServer() {
@@ -104,23 +99,13 @@ void CentraleLogic::setupWebServer() {
         request->send(LittleFS, "/index_centrale.html", "text/html");
     });
 
-    // Route to get system status
-    server.on("/api/status", HTTP_GET, [](AsyncWebServerRequest *request){
-        request->send(200, "application/json", instance->getSystemStatusJson());
-    });
+    server.on("/api/assign", HTTP_POST, [](AsyncWebServerRequest *request){
+        if (request->hasParam("reservoirId", true) && request->hasParam("wellId", true)) {
+            String reservoirId = request->getParam("reservoirId", true)->value();
+            String wellId = request->getParam("wellId", true)->value();
 
-    // Route to assign a reservoir to a well
-    server.on("/api/assign", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
-        [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total) {
-
-        StaticJsonDocument<128> doc;
-        deserializeJson(doc, (const char*)data, len);
-        String reservoirId = doc["reservoirId"];
-        String wellId = doc["wellId"];
-
-        if (reservoirId.length() > 0 && wellId.length() > 0) {
-            bool isShared = false;
             if (xSemaphoreTake(nodeListMutex_Centrale, portMAX_DELAY) == pdTRUE) {
+                bool isShared = false;
                 for (int i = 0; i < instance->nodeCount; i++) {
                     if (instance->nodeList[i].id.equals(reservoirId)) {
                         instance->nodeList[i].assignedTo = wellId;
@@ -157,7 +142,6 @@ void CentraleLogic::setupWebServer() {
         }
     });
 
-    // Route to set a node's name
     server.on("/api/set-name", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total){
         StaticJsonDocument<128> doc;

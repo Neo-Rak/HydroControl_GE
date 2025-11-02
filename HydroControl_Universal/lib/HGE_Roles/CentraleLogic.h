@@ -2,27 +2,24 @@
 #define CENTRALE_LOGIC_H
 
 #include <Arduino.h>
+#include <LoRa.h>
 #include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
+#include <Preferences.h>
 #include "Message.h"
+#include "config.h" // Utilisation de la configuration centralisée
 
-// Hardware configuration
-#define CENTRALE_LORA_SS_PIN    5
-#define CENTRALE_LORA_RST_PIN   14
-#define CENTRALE_LORA_DIO0_PIN  2
-#define CENTRALE_LORA_FREQ      433E6
+#define MAX_NODES 16
+#define LORA_RX_PACKET_MAX_LEN 256
 
-// System limits
-#define MAX_NODES 32
-
-// Node Data Structure
 struct Node {
     String id;
     String name;
     NodeRole type;
-    long lastSeen;
-    int rssi;
+    long rssi;
     String status;
-    String assignedTo;
+    unsigned long lastSeen;
+    String assignedTo; // For AquaReserv, stores the Wellguard ID it's assigned to
 };
 
 class CentraleLogic {
@@ -33,11 +30,10 @@ public:
 private:
     Node nodeList[MAX_NODES];
     int nodeCount = 0;
-
     AsyncWebServer server;
     AsyncEventSource events;
+    String deviceId;
 
-    void setupHardware();
     void setupLoRa();
     void setupWebServer();
     void startTasks();
@@ -48,15 +44,15 @@ private:
     void saveNodeName(const String& nodeId, const String& nodeName);
     String loadNodeName(const String& nodeId);
 
+    // Static members to be accessed by ISR/callbacks
+    static CentraleLogic* instance;
     static void onReceive(int packetSize);
     static void handleLoRaPacket(const String& packet, int rssi);
     static void sendLoRaMessage(const String& message);
 
-    static CentraleLogic* instance;
-
-    // FreeRTOS task prototypes
-    static void Task_Node_Janitor(void *pvParameters);
+    // FreeRTOS tasks and synchronization
     static void Task_LoRa_Handler(void *pvParameters);
+    static void Task_Node_Janitor(void *pvParameters);
     static void Task_SSE_Publisher(void* pvParameters);
 };
 

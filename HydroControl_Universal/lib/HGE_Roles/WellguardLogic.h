@@ -5,14 +5,7 @@
 #include <LoRa.h>
 #include <Preferences.h>
 #include "Message.h"
-
-// Hardware configuration for WellguardPro role
-#define WGP_LORA_SS_PIN    5
-#define WGP_LORA_RST_PIN   14
-#define WGP_LORA_DIO0_PIN  2
-#define WGP_LORA_FREQ      433E6
-
-#define WGP_RELAY_PIN      23
+#include "config.h" // Utilisation de la configuration centralisée
 
 class WellguardLogic {
 public:
