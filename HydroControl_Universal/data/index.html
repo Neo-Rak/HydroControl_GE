@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HydroControl-GE - Commissioning</title>
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+        .container { background-color: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); max-width: 500px; width: 100%; }
+        h1 { color: #333; text-align: center; border-bottom: 2px solid #007bff; padding-bottom: 10px; margin-bottom: 20px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: bold; margin-bottom: 8px; color: #555; }
+        select, input[type="text"], input[type="password"] { width: 100%; padding: 12px; border: 1px solid #ccc; border-radius: 5px; box-sizing: border-box; transition: border-color 0.3s; }
+        select:focus, input:focus { border-color: #007bff; outline: none; }
+        button { background-color: #007bff; color: white; padding: 12px 20px; border: none; border-radius: 5px; cursor: pointer; width: 100%; font-size: 16px; transition: background-color 0.3s; }
+        button:hover { background-color: #0056b3; }
+        .hidden { display: none; }
+        #wifi-credentials { border-top: 1px solid #eee; padding-top: 20px; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>HydroControl-GE Commissioning</h1>
+        <form action="/configure" method="post">
+            <div class="form-group">
+                <label for="role">Select Device Role:</label>
+                <select id="role" name="role" required onchange="toggleWifiFields()">
+                    <option value="" disabled selected>-- Choose a role --</option>
+                    <option value="Centrale">Centrale (Supervisor)</option>
+                    <option value="AquaReservPro">AquaReservPro (Reservoir)</option>
+                    <option value="WellguardPro">WellguardPro (Well Pump)</option>
+                </select>
+            </div>
+
+            <div id="wifi-credentials" class="form-group hidden">
+                <label for="ssid">WiFi SSID:</label>
+                <input type="text" id="ssid" name="ssid">
+                <label for="password" style="margin-top: 10px;">WiFi Password:</label>
+                <input type="password" id="password" name="password">
+            </div>
+
+            <div class="form-group">
+                <label for="lora_psk">LoRa Security Key (16 chars):</label>
+                <input type="text" id="lora_psk" name="lora_psk" required maxlength="16" minlength="16" pattern=".{16,16}" title="Must be exactly 16 characters long.">
+            </div>
+
+            <button type="submit">Save Configuration & Reboot</button>
+        </form>
+    </div>
+
+    <script>
+        function toggleWifiFields() {
+            var roleSelector = document.getElementById('role');
+            var wifiFields = document.getElementById('wifi-credentials');
+            if (roleSelector.value === 'Centrale') {
+                wifiFields.classList.remove('hidden');
+                document.getElementById('ssid').required = true;
+            } else {
+                wifiFields.classList.add('hidden');
+                document.getElementById('ssid').required = false;
+            }
+        }
+    </script>
+</body>
+</html>
