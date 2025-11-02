@@ -5,14 +5,9 @@
 #include <LoRa.h>
 #include <Preferences.h>
 #include "Message.h"
+#include "config.h" // Utilisation de la configuration centralisée
 
-// Hardware configuration for WellguardPro role
-#define WGP_LORA_SS_PIN    5
-#define WGP_LORA_RST_PIN   14
-#define WGP_LORA_DIO0_PIN  2
-#define WGP_LORA_FREQ      433E6
-
-#define WGP_RELAY_PIN      23
+#define LORA_RX_PACKET_MAX_LEN 256
 
 class WellguardLogic {
 public:
@@ -22,6 +17,7 @@ public:
 private:
     String deviceId;
     volatile bool relayState = false;
+    volatile bool hardwareFaultActive = false; // Nouvel état de défaut
     volatile long lastCommandRssi = 0;
     volatile unsigned long lastLoRaTransmissionTimestamp = 0;
 
@@ -38,6 +34,8 @@ private:
     static WellguardLogic* instance;
 
     // FreeRTOS tasks
+    static void Task_LoRa_Handler(void *pvParameters);
+    static void Task_Fault_Monitor(void *pvParameters); // Nouvelle tâche
     static void Task_Status_Reporter(void *pvParameters);
 };
 

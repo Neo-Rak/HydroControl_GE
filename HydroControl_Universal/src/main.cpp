@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include "RoleManager.h"
+#include "WatchdogManager.h" // Inclure le gestionnaire de watchdog
 #include "WifiProvisioning.h"
 #include "CentraleLogic.h"
 #include "AquaReservLogic.h"
@@ -18,6 +19,10 @@ void setup() {
   while (!Serial);
 
   Serial.println("Booting HydroControl-GE Universal Firmware v3.0.0...");
+
+  // Initialisation du watchdog avec un timeout de 15 secondes.
+  // Si le système se bloque, il redémarrera automatiquement.
+  WatchdogManager::initialize(15);
 
   currentRole = roleManager.loadRole();
 

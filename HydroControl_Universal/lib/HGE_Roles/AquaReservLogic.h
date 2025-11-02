@@ -5,22 +5,14 @@
 #include <LoRa.h>
 #include <Preferences.h>
 #include "Message.h"
-
-// Hardware configuration for AquaReservPro role
-#define ARP_LORA_SS_PIN    5
-#define ARP_LORA_RST_PIN   14
-#define ARP_LORA_DIO0_PIN  2
-#define ARP_LORA_FREQ      433E6
-
-#define ARP_LEVEL_SENSOR_PIN 23
-#define ARP_BUTTON_PIN       22
+#include "config.h" // Utilisation de la configuration centralisée
 
 // Logic configuration
-#define SENSOR_STABILITY_MS 5000
+#define SENSOR_STABILITY_MS 2000 // Temps en ms avant de considérer un état de capteur comme stable
 
 // State enumerations
 enum OperatingMode { AUTO, MANUAL };
-enum LevelState { LEVEL_EMPTY, LEVEL_FULL, LEVEL_UNKNOWN };
+enum LevelState { LEVEL_EMPTY, LEVEL_OK, LEVEL_FULL, LEVEL_ERROR }; // Ajout de l'état OK et ERROR
 
 class AquaReservLogic {
 public:
@@ -32,7 +24,7 @@ private:
     String assignedWellId = "";
     bool isWellShared = false;
     OperatingMode currentMode = AUTO;
-    LevelState currentLevel = LEVEL_UNKNOWN;
+    LevelState currentLevel = LEVEL_OK; // Initialiser à OK
     bool currentPumpCommand = false;
     volatile unsigned long lastLoRaTransmissionTimestamp = 0;
 

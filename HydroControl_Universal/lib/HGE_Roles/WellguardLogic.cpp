@@ -2,8 +2,12 @@
 #include <WiFi.h>
 #include <SPI.h>
 #include "Crypto.h"
+#include "WatchdogManager.h"
 
 WellguardLogic* WellguardLogic::instance = nullptr;
+
+// --- FreeRTOS Handles ---
+QueueHandle_t loraRxQueue_WGP;
 
 // Constructor
 WellguardLogic::WellguardLogic() {
@@ -13,10 +17,11 @@ WellguardLogic::WellguardLogic() {
 void WellguardLogic::initialize() {
     Serial.println("Wellguard Logic Initializing...");
 
-    // Generate a unique device ID from MAC address
     deviceId = WiFi.macAddress();
     deviceId.replace(":", "");
     Serial.println("Device ID: " + deviceId);
+
+    loraRxQueue_WGP = xQueueCreate(10, LORA_RX_PACKET_MAX_LEN);
 
     setupHardware();
     setupLoRa();
@@ -26,21 +31,19 @@ void WellguardLogic::initialize() {
 }
 
 void WellguardLogic::setupHardware() {
-    pinMode(WGP_RELAY_PIN, OUTPUT);
-    digitalWrite(WGP_RELAY_PIN, LOW);
-    // Other hardware setup like LEDs will be handled by a common LEDManager
+    pinMode(WELLGUARD_RELAY_PIN, OUTPUT);
+    digitalWrite(WELLGUARD_RELAY_PIN, LOW);
+    pinMode(WELLGUARD_FAULT_PIN, INPUT_PULLUP); // Initialiser la broche de défaut
 }
 
 void WellguardLogic::setupLoRa() {
-    SPI.begin();
-    LoRa.setPins(WGP_LORA_SS_PIN, WGP_LORA_RST_PIN, WGP_LORA_DIO0_PIN);
-    if (!LoRa.begin(WGP_LORA_FREQ)) {
+    SPI.begin(LORA_SCK_PIN, LORA_MISO_PIN, LORA_MOSI_PIN);
+    LoRa.setPins(LORA_SS_PIN, LORA_RST_PIN, LORA_DIO0_PIN);
+    if (!LoRa.begin(433E6)) { // Fréquence 433 MHz
         Serial.println("Starting LoRa failed!");
-        // Trigger a critical error state via LEDManager
         while (1);
     }
 
-    // Load LoRa PSK from preferences
     Preferences prefs;
     prefs.begin("security_config", true);
     String psk = prefs.getString("lora_psk", "");
@@ -59,21 +62,58 @@ void WellguardLogic::setupLoRa() {
 }
 
 void WellguardLogic::startTasks() {
-    xTaskCreate(
-        Task_Status_Reporter,
-        "StatusReporter",
-        4096,
-        this,
-        1,
-        NULL
-    );
+    xTaskCreate(Task_LoRa_Handler, "LoRaHandler", 4096, this, 3, NULL);
+    xTaskCreate(Task_Fault_Monitor, "FaultMonitor", 2048, this, 4, NULL); // Lancer la nouvelle tâche avec une haute priorité
+    xTaskCreate(Task_Status_Reporter, "StatusReporter", 4096, this, 1, NULL);
 }
 
 // --- FreeRTOS Tasks ---
 
+void WellguardLogic::Task_LoRa_Handler(void *pvParameters) {
+    WatchdogManager::registerTask();
+    char packetBuffer[LORA_RX_PACKET_MAX_LEN];
+    for (;;) {
+        WatchdogManager::pet();
+        if (xQueueReceive(loraRxQueue_WGP, &packetBuffer, portMAX_DELAY) == pdPASS) {
+            String fullPacket(packetBuffer);
+            int separatorIndex = fullPacket.lastIndexOf('\1');
+            String encryptedPacket = fullPacket.substring(0, separatorIndex);
+            instance->lastCommandRssi = fullPacket.substring(separatorIndex + 1).toInt();
+
+            String decryptedPacket = CryptoManager::decrypt(encryptedPacket);
+            if (decryptedPacket.length() > 0) {
+                handleLoRaPacket(decryptedPacket);
+            }
+        }
+    }
+}
+
+void WellguardLogic::Task_Fault_Monitor(void* pvParameters) {
+    WellguardLogic* self = (WellguardLogic*)pvParameters;
+    WatchdogManager::registerTask();
+    for(;;) {
+        WatchdogManager::pet();
+        // Rappel: INPUT_PULLUP, donc LOW signifie que le défaut est actif.
+        bool faultDetected = (digitalRead(WELLGUARD_FAULT_PIN) == LOW);
+
+        if (faultDetected && !self->hardwareFaultActive) {
+            // Un nouveau défaut est détecté
+            self->hardwareFaultActive = true;
+            Serial.println("CRITICAL: Hardware fault detected! Forcing pump OFF.");
+            self->setRelayState(false); // Forcer l'arrêt du relais
+        } else if (!faultDetected && self->hardwareFaultActive) {
+            // Le défaut a été résolu
+            self->hardwareFaultActive = false;
+            Serial.println("INFO: Hardware fault cleared.");
+        }
+        vTaskDelay(pdMS_TO_TICKS(100)); // Vérifier toutes les 100ms
+    }
+}
+
+
 void WellguardLogic::Task_Status_Reporter(void *pvParameters) {
     WellguardLogic* self = (WellguardLogic*)pvParameters;
-    const int HEARTBEAT_INTERVAL_MS = 120000;
+    const int HEARTBEAT_INTERVAL_MS = 60000; // Réduire pour un rapport plus fréquent en cas de défaut
 
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(HEARTBEAT_INTERVAL_MS));
@@ -82,7 +122,13 @@ void WellguardLogic::Task_Status_Reporter(void *pvParameters) {
             continue;
         }
 
-        String status = self->relayState ? "ON" : "OFF";
+        String status;
+        if(self->hardwareFaultActive) {
+            status = "FAULT";
+        } else {
+            status = self->relayState ? "ON" : "OFF";
+        }
+
         String statusPacket = LoRaMessage::serializeStatusUpdate(self->deviceId.c_str(), status.c_str(), self->lastCommandRssi);
         sendLoRaMessage(statusPacket);
     }
@@ -92,22 +138,13 @@ void WellguardLogic::Task_Status_Reporter(void *pvParameters) {
 // --- LoRa Communication ---
 
 void WellguardLogic::onReceive(int packetSize) {
-    if (packetSize == 0) return;
-
-    String encryptedPacket = "";
-    while (LoRa.available()) {
-        encryptedPacket += (char)LoRa.read();
-    }
-
-    instance->lastCommandRssi = LoRa.packetRssi();
-
-    String decryptedPacket = CryptoManager::decrypt(encryptedPacket);
-
-    if (decryptedPacket.length() > 0) {
-        handleLoRaPacket(decryptedPacket);
-    } else {
-        Serial.println("Decryption failed.");
-    }
+    if (packetSize == 0 || packetSize > LORA_RX_PACKET_MAX_LEN) return;
+    char packetBuffer[LORA_RX_PACKET_MAX_LEN];
+    int len = 0;
+    while (LoRa.available()) packetBuffer[len++] = (char)LoRa.read();
+    packetBuffer[len] = '\0';
+    snprintf(packetBuffer + len, sizeof(packetBuffer) - len, "\1%d", LoRa.packetRssi());
+    xQueueSendFromISR(loraRxQueue_WGP, &packetBuffer, NULL);
 }
 
 void WellguardLogic::handleLoRaPacket(const String& packet) {
@@ -121,7 +158,7 @@ void WellguardLogic::handleLoRaPacket(const String& packet) {
     }
 
     const char* targetId = doc["tgt"];
-    if (targetId == nullptr || instance->deviceId.equals(targetId)) {
+    if (targetId != nullptr && instance->deviceId.equals(targetId)) {
 
         int type = doc["type"];
         if (type == MessageType::COMMAND) {
@@ -139,11 +176,22 @@ void WellguardLogic::handleLoRaPacket(const String& packet) {
 }
 
 void WellguardLogic::setRelayState(bool newState) {
+    // Logique de sécurité : Ne jamais allumer si un défaut matériel est actif.
+    if (newState && hardwareFaultActive) {
+        Serial.println("WARN: Pump activation inhibited by active hardware fault.");
+        return;
+    }
+
     relayState = newState;
-    digitalWrite(WGP_RELAY_PIN, relayState ? HIGH : LOW);
+    digitalWrite(WELLGUARD_RELAY_PIN, relayState ? HIGH : LOW);
     Serial.printf("Relay state set to: %s\n", relayState ? "ON" : "OFF");
 
-    String status = relayState ? "ON" : "OFF";
+    String status;
+    if(hardwareFaultActive) {
+        status = "FAULT";
+    } else {
+        status = relayState ? "ON" : "OFF";
+    }
     String statusPacket = LoRaMessage::serializeStatusUpdate(deviceId.c_str(), status.c_str(), LoRa.packetRssi());
     sendLoRaMessage(statusPacket);
 }
