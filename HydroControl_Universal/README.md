@@ -46,18 +46,18 @@ Le projet est organisé de manière modulaire pour faciliter la maintenance et l
 
 ## 4. Diagnostic Visuel par LEDs
 
-Tous les modules sont équipés d'un système de diagnostic visuel utilisant une LED RGB pour fournir un retour instantané sur l'état du système. Cela permet une maintenance et un dépannage rapides sur le terrain.
+Tous les modules sont équipés d'un système de diagnostic visuel utilisant trois LEDs indépendantes (Rouge, Verte, Jaune) pour fournir un retour instantané sur l'état du système.
 
-| Couleur & Motif                | Signification                                      | Rôles concernés |
-| ------------------------------ | -------------------------------------------------- | --------------- |
-| **Blanc, clignotement lent**   | Démarrage en cours (Booting)                       | Tous            |
-| **Vert, fixe**                 | Système opérationnel, tout est normal (System OK)   | Tous            |
-| **Bleu, fixe**                 | Mode configuration (Setup Mode / Provisioning)     | Tous            |
-| **Cyan, clignotement**         | Transmission LoRa en cours                         | Tous            |
-| **Magenta, clignotement**      | Réception LoRa en cours                            | Tous            |
-| **Jaune, clignotement lent**   | Action en cours (ex: pompe activée)                | Tous            |
-| **Orange, clignotement**       | Avertissement (Warning), condition anormale        | Tous            |
-| **Rouge, clignotement rapide** | Erreur Critique (Critical Error), intervention requise | Tous            |
+| Combinaison de LEDs                   | Signification                                      |
+| ------------------------------------- | -------------------------------------------------- |
+| **Jaune, clignotement lent**          | Démarrage en cours (Booting)                       |
+| **Vert, fixe**                        | Système opérationnel, inactif (System OK)          |
+| **Vert, clignotement lent**           | Action normale en cours (ex: pompe activée)        |
+| **Jaune et Vert, alterné**            | Mode configuration (Setup Mode)                    |
+| **Vert fixe + flash Jaune**           | Activité réseau (LoRa TX/RX)                       |
+| **Jaune, fixe**                       | Avertissement (Warning), condition anormale        |
+| **Rouge, clignotement rapide**        | Erreur Critique (Critical Error)                   |
+| **Toutes éteintes**                   | Module non alimenté ou état OFF                    |
 
 ## 5. Configuration et Brochage (Pinout)
 
@@ -74,10 +74,10 @@ Chaque module nécessite un câblage spécifique pour ses périphériques. Les b
   - `NSS`  -> `GPIO 5`
   - `RST`  -> `GPIO 14`
   - `DIO0` -> `GPIO 2`
-- **LEDs de Statut (RGB)**:
-  - `Rouge` -> `GPIO 15`
-  - `Vert`  -> `GPIO 16`
-  - `Bleu`  -> `GPIO 17`
+- **LEDs de Statut**:
+  - `Rouge`  -> `GPIO 15`
+  - `Verte`  -> `GPIO 16`
+  - `Jaune`  -> `GPIO 17`
 
 ### 4.2. AquaReserv Pro
 

@@ -3,7 +3,8 @@
 #include <SPI.h>
 #include "Crypto.h"
 #include "LittleFS.h"
-#include "WatchdogManager.h" // Inclure le gestionnaire de watchdog
+#include "WatchdogManager.h"
+#include "LedManager.h"
 
 CentraleLogic* CentraleLogic::instance = nullptr;
 
@@ -340,6 +341,9 @@ String CentraleLogic::loadNodeName(const String& nodeId) {
 
 void CentraleLogic::onReceive(int packetSize) {
     if (packetSize == 0 || packetSize > LORA_RX_PACKET_MAX_LEN) return;
+
+    ledManager.setTemporaryState(LORA_ACTIVITY, 500);
+
     char packetBuffer[LORA_RX_PACKET_MAX_LEN];
     int len = 0;
     while (LoRa.available()) packetBuffer[len++] = (char)LoRa.read();
@@ -371,6 +375,8 @@ void CentraleLogic::handleLoRaPacket(const String& packet, int rssi) {
 }
 
 void CentraleLogic::sendLoRaMessage(const String& message) {
+    ledManager.setTemporaryState(LORA_ACTIVITY, 500);
+
     String encrypted = CryptoManager::encrypt(message);
     LoRa.beginPacket();
     LoRa.print(encrypted);

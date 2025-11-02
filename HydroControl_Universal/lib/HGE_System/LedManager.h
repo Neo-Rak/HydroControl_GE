@@ -13,8 +13,7 @@ enum LedState {
     BOOTING,
     SYSTEM_OK,
     SETUP_MODE,
-    LORA_TRANSMITTING,
-    LORA_RECEIVING,
+    LORA_ACTIVITY,
     ACTION_IN_PROGRESS,
     WARNING,
     CRITICAL_ERROR
@@ -22,20 +21,16 @@ enum LedState {
 
 class LedManager {
 public:
-    LedManager(int redPin, int greenPin, int bluePin);
+    LedManager(int redPin, int greenPin, int yellowPin);
     void begin();
     void setState(LedState newState);
+    void setTemporaryState(LedState tempState, uint32_t durationMs);
 
 private:
     // Pins
     int _redPin;
     int _greenPin;
-    int _bluePin;
-
-    // LEDC PWM Channels
-    const int _redChannel = 0;
-    const int _greenChannel = 1;
-    const int _blueChannel = 2;
+    int _yellowPin;
 
     // FreeRTOS
     TaskHandle_t _ledTaskHandle;
@@ -43,5 +38,4 @@ private:
     volatile LedState _currentState;
 
     static void ledTask(void* parameter);
-    void setColor(int red, int green, int blue);
 };

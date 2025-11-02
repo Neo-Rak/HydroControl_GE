@@ -259,7 +259,7 @@ void AquaReservLogic::Task_Status_Reporter(void *pvParameters) {
 void AquaReservLogic::onReceive(int packetSize) {
     if (packetSize == 0) return;
 
-    ledManager.setState(LORA_RECEIVING);
+    ledManager.setTemporaryState(LORA_ACTIVITY, 500);
 
     String encryptedPacket = "";
     while (LoRa.available()) {
@@ -316,7 +316,7 @@ bool AquaReservLogic::sendReliableCommand(const String& packet) {
 }
 
 void AquaReservLogic::sendLoRaMessage(const String& message) {
-    ledManager.setState(LORA_TRANSMITTING);
+    ledManager.setTemporaryState(LORA_ACTIVITY, 500);
 
     String encrypted = CryptoManager::encrypt(message);
     LoRa.beginPacket();
@@ -325,12 +325,4 @@ void AquaReservLogic::sendLoRaMessage(const String& message) {
 
     instance->lastLoRaTransmissionTimestamp = millis();
     Serial.printf("Sent LoRa Packet: %s\n", message.c_str());
-
-    // Restore the LED to its previous state after a short delay
-    vTaskDelay(pdMS_TO_TICKS(500)); // Keep transmit color for 500ms
-    if(instance->currentPumpCommand) {
-        ledManager.setState(ACTION_IN_PROGRESS);
-    } else {
-        ledManager.setState(SYSTEM_OK);
-    }
 }

@@ -1,30 +1,25 @@
 #include "LedManager.h"
-#include "config.h" // Inclure pour avoir accès aux pins des LEDs
+#include "config.h"
 
-// Global instance declaration
-LedManager ledManager(LED_RED_PIN, LED_GREEN_PIN, LED_BLUE_PIN);
+// Global instance definition
+LedManager ledManager(LED_RED_PIN, LED_GREEN_PIN, LED_YELLOW_PIN);
 
-// Constructeur
-LedManager::LedManager(int redPin, int greenPin, int bluePin)
-    : _redPin(redPin), _greenPin(greenPin), _bluePin(bluePin),
+// Constructor
+LedManager::LedManager(int redPin, int greenPin, int yellowPin)
+    : _redPin(redPin), _greenPin(greenPin), _yellowPin(yellowPin),
       _ledTaskHandle(NULL), _ledStateQueue(NULL), _currentState(OFF) {}
 
 // Initialisation
 void LedManager::begin() {
-    // Setup LEDC PWM channels
-    ledcSetup(_redChannel, 5000, 8); // 5 kHz PWM, 8-bit resolution
-    ledcSetup(_greenChannel, 5000, 8);
-    ledcSetup(_blueChannel, 5000, 8);
+    pinMode(_redPin, OUTPUT);
+    pinMode(_greenPin, OUTPUT);
+    pinMode(_yellowPin, OUTPUT);
 
-    // Attach pins to channels
-    ledcAttachPin(_redPin, _redChannel);
-    ledcAttachPin(_greenPin, _greenChannel);
-    ledcAttachPin(_bluePin, _blueChannel);
+    digitalWrite(_redPin, LOW);
+    digitalWrite(_greenPin, LOW);
+    digitalWrite(_yellowPin, LOW);
 
-    // Initial state: OFF
-    setColor(0, 0, 0);
-
-    _ledStateQueue = xQueueCreate(10, sizeof(LedState)); // Increased queue size
+    _ledStateQueue = xQueueCreate(10, sizeof(LedState));
 
     xTaskCreate(
         ledTask,
@@ -36,94 +31,71 @@ void LedManager::begin() {
     );
 }
 
-// Changer l'état de la LED
+// Set new state
 void LedManager::setState(LedState newState) {
-    xQueueSend(_ledStateQueue, &newState, portMAX_DELAY);
-}
-
-// Tâche FreeRTOS pour gérer les LEDs de manière non-bloquante
-void LedManager::ledTask(void* parameter) {
-    LedManager* self = (LedManager*)parameter;
-    LedState receivedState;
-
-    while (true) {
-        // Attendre un nouvel état de la file d'attente
-        if (xQueueReceive(self->_ledStateQueue, &receivedState, 100 / portTICK_PERIOD_MS)) {
-            self->_currentState = receivedState;
-        }
-
-        // Logique des états
-        switch (self->_currentState) {
-            case OFF:
-                self->setColor(0, 0, 0); // Éteint
-                break;
-
-            case BOOTING:
-                // Blanc clignotant lentement (200ms on, 800ms off)
-                self->setColor(255, 255, 255);
-                vTaskDelay(200 / portTICK_PERIOD_MS);
-                self->setColor(0, 0, 0);
-                vTaskDelay(800 / portTICK_PERIOD_MS);
-                break;
-
-            case SYSTEM_OK:
-                self->setColor(0, 255, 0); // Vert fixe
-                break;
-
-            case SETUP_MODE:
-                self->setColor(0, 0, 255); // Bleu fixe
-                break;
-
-            case LORA_TRANSMITTING:
-                // Cyan clignotant (100ms on, 100ms off)
-                self->setColor(0, 255, 255);
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                self->setColor(0, 0, 0);
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                break;
-
-            case LORA_RECEIVING:
-                // Magenta clignotant (100ms on, 100ms off)
-                self->setColor(255, 0, 255);
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                self->setColor(0, 0, 0);
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                break;
-
-            case ACTION_IN_PROGRESS:
-                // Jaune clignotant (500ms on, 500ms off)
-                self->setColor(255, 255, 0);
-                vTaskDelay(500 / portTICK_PERIOD_MS);
-                self->setColor(0, 0, 0);
-                vTaskDelay(500 / portTICK_PERIOD_MS);
-                break;
-
-            case WARNING:
-                // Orange clignotant (250ms on, 250ms off)
-                self->setColor(255, 165, 0);
-                vTaskDelay(250 / portTICK_PERIOD_MS);
-                self->setColor(0, 0, 0);
-                vTaskDelay(250 / portTICK_PERIOD_MS);
-                break;
-
-            case CRITICAL_ERROR:
-                // Rouge clignotant rapidement (100ms on, 100ms off)
-                self->setColor(255, 0, 0);
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                self->setColor(0, 0, 0);
-                vTaskDelay(100 / portTICK_PERIOD_MS);
-                break;
-
-            default:
-                self->setColor(0, 0, 0);
-                break;
-        }
+    // A temporary state should not overwrite the persistent state
+    if (_currentState != LORA_ACTIVITY) {
+        xQueueSend(_ledStateQueue, &newState, 0);
     }
 }
 
-// Fonction utilitaire pour définir la couleur
-void LedManager::setColor(int red, int green, int blue) {
-    ledcWrite(_redChannel, red);
-    ledcWrite(_greenChannel, green);
-    ledcWrite(_blueChannel, blue);
+void LedManager::setTemporaryState(LedState tempState, uint32_t durationMs) {
+    // This is a simplified approach. A more robust implementation might queue temporary states.
+    LedState persistentState = _currentState;
+    setState(tempState);
+    vTaskDelay(pdMS_TO_TICKS(durationMs));
+    setState(persistentState);
+}
+
+
+// FreeRTOS Task
+void LedManager::ledTask(void* parameter) {
+    LedManager* self = (LedManager*)parameter;
+    LedState receivedState;
+    uint32_t tickCount = 0;
+
+    while (true) {
+        // Check for new state, but don't block
+        if (xQueueReceive(self->_ledStateQueue, &receivedState, 0) == pdPASS) {
+            self->_currentState = receivedState;
+        }
+
+        // Turn all LEDs off before setting the new pattern
+        digitalWrite(self->_redPin, LOW);
+        digitalWrite(self->_greenPin, LOW);
+        digitalWrite(self->_yellowPin, LOW);
+
+        tickCount++;
+
+        // State logic
+        switch (self->_currentState) {
+            case OFF:
+                // All off (already done)
+                break;
+            case BOOTING: // Yellow pulse
+                if (tickCount % 10 < 5) digitalWrite(self->_yellowPin, HIGH);
+                break;
+            case SYSTEM_OK: // Green solid
+                digitalWrite(self->_greenPin, HIGH);
+                break;
+            case SETUP_MODE: // Alternating Yellow/Green
+                if (tickCount % 10 < 5) digitalWrite(self->_yellowPin, HIGH);
+                else digitalWrite(self->_greenPin, HIGH);
+                break;
+            case LORA_ACTIVITY: // Green with Yellow flash
+                digitalWrite(self->_greenPin, HIGH);
+                if (tickCount % 4 < 2) digitalWrite(self->_yellowPin, HIGH);
+                break;
+            case ACTION_IN_PROGRESS: // Green breathing
+                if (tickCount % 10 < 7) digitalWrite(self->_greenPin, HIGH);
+                break;
+            case WARNING: // Yellow solid
+                digitalWrite(self->_yellowPin, HIGH);
+                break;
+            case CRITICAL_ERROR: // Red fast blink
+                if (tickCount % 2 < 1) digitalWrite(self->_redPin, HIGH);
+                break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100)); // Update every 100ms
+    }
 }
