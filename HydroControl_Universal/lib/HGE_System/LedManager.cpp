@@ -19,7 +19,7 @@ void LedManager::begin() {
     digitalWrite(_greenPin, LOW);
     digitalWrite(_yellowPin, LOW);
 
-    _ledStateQueue = xQueueCreate(10, sizeof(LedState));
+    _ledStateQueue = xQueueCreate(10, sizeof(LedCommand));
 
     xTaskCreate(
         ledTask,
@@ -31,34 +31,50 @@ void LedManager::begin() {
     );
 }
 
-// Set new state
+// Set a persistent state
 void LedManager::setState(LedState newState) {
-    // A temporary state should not overwrite the persistent state
-    if (_currentState != LORA_ACTIVITY) {
-        xQueueSend(_ledStateQueue, &newState, 0);
-    }
+    LedCommand cmd = {newState, 0};
+    xQueueSend(_ledStateQueue, &cmd, 0);
 }
 
+// Set a temporary state that reverts after a duration
 void LedManager::setTemporaryState(LedState tempState, uint32_t durationMs) {
-    // This is a simplified approach. A more robust implementation might queue temporary states.
-    LedState persistentState = _currentState;
-    setState(tempState);
-    vTaskDelay(pdMS_TO_TICKS(durationMs));
-    setState(persistentState);
+    LedCommand cmd = {tempState, durationMs};
+    xQueueSend(_ledStateQueue, &cmd, 0);
 }
-
 
 // FreeRTOS Task
 void LedManager::ledTask(void* parameter) {
     LedManager* self = (LedManager*)parameter;
-    LedState receivedState;
+    LedCommand receivedCommand;
+    LedState persistentState = OFF;
+    LedState renderState = OFF;
+    uint32_t tempStateEndTime = 0;
     uint32_t tickCount = 0;
 
     while (true) {
-        // Check for new state, but don't block
-        if (xQueueReceive(self->_ledStateQueue, &receivedState, 0) == pdPASS) {
-            self->_currentState = receivedState;
+        // Check for new commands without blocking
+        if (xQueueReceive(self->_ledStateQueue, &receivedCommand, 0) == pdPASS) {
+            if (receivedCommand.durationMs > 0) {
+                // This is a temporary state
+                renderState = receivedCommand.state;
+                tempStateEndTime = millis() + receivedCommand.durationMs;
+            } else {
+                // This is a new persistent state
+                persistentState = receivedCommand.state;
+                // Only apply it if no temporary state is active
+                if (millis() >= tempStateEndTime) {
+                    renderState = persistentState;
+                }
+            }
         }
+
+        // If a temporary state was active and has now expired, revert to the persistent state
+        if (renderState != persistentState && millis() >= tempStateEndTime) {
+            renderState = persistentState;
+        }
+
+        self->_currentState = renderState;
 
         // Turn all LEDs off before setting the new pattern
         digitalWrite(self->_redPin, LOW);
@@ -67,10 +83,9 @@ void LedManager::ledTask(void* parameter) {
 
         tickCount++;
 
-        // State logic
-        switch (self->_currentState) {
+        // State logic based on the current renderState
+        switch (renderState) {
             case OFF:
-                // All off (already done)
                 break;
             case BOOTING: // Yellow pulse
                 if (tickCount % 10 < 5) digitalWrite(self->_yellowPin, HIGH);

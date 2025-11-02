@@ -19,6 +19,11 @@ enum LedState {
     CRITICAL_ERROR
 };
 
+struct LedCommand {
+    LedState state;
+    uint32_t durationMs; // 0 for persistent state
+};
+
 class LedManager {
 public:
     LedManager(int redPin, int greenPin, int yellowPin);

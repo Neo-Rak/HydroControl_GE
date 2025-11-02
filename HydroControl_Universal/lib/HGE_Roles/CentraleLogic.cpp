@@ -183,9 +183,10 @@ void CentraleLogic::setupWebServer() {
 void CentraleLogic::Task_LoRa_Handler(void *pvParameters) {
     WatchdogManager::registerTask();
     char packetBuffer[LORA_RX_PACKET_MAX_LEN];
+    const TickType_t xTicksToWait = pdMS_TO_TICKS(1000); // Wait for 1 second
     for (;;) {
         WatchdogManager::pet();
-        if (xQueueReceive(loraRxQueue_Centrale, &packetBuffer, portMAX_DELAY) == pdPASS) {
+        if (xQueueReceive(loraRxQueue_Centrale, &packetBuffer, xTicksToWait) == pdPASS) {
             String fullPacket(packetBuffer);
             int separatorIndex = fullPacket.lastIndexOf('\1');
             String encryptedPacket = fullPacket.substring(0, separatorIndex);
