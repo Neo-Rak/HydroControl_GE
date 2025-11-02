@@ -44,15 +44,28 @@ Le projet est organisé de manière modulaire pour faciliter la maintenance et l
 - **Arbitrage des Ressources** : La Centrale gère l'accès aux ressources partagées (pompes) pour éviter les conflits et les dommages matériels.
 - **Interface de Supervision** : La Centrale offre un dashboard web pour visualiser l'état de l'ensemble du système en temps réel.
 
-## 4. Configuration et Brochage (Pinout)
+## 4. Diagnostic Visuel par LEDs
 
-Chaque module nécessite un câblage spécifique pour ses périphériques. Les broches ont été choisies pour éviter les conflits avec les fonctions de base de l'ESP32 (strapping pins, etc.).
+Tous les modules sont équipés d'un système de diagnostic visuel utilisant une LED RGB pour fournir un retour instantané sur l'état du système. Cela permet une maintenance et un dépannage rapides sur le terrain.
+
+| Couleur & Motif                | Signification                                      | Rôles concernés |
+| ------------------------------ | -------------------------------------------------- | --------------- |
+| **Blanc, clignotement lent**   | Démarrage en cours (Booting)                       | Tous            |
+| **Vert, fixe**                 | Système opérationnel, tout est normal (System OK)   | Tous            |
+| **Bleu, fixe**                 | Mode configuration (Setup Mode / Provisioning)     | Tous            |
+| **Cyan, clignotement**         | Transmission LoRa en cours                         | Tous            |
+| **Magenta, clignotement**      | Réception LoRa en cours                            | Tous            |
+| **Jaune, clignotement lent**   | Action en cours (ex: pompe activée)                | Tous            |
+| **Orange, clignotement**       | Avertissement (Warning), condition anormale        | Tous            |
+| **Rouge, clignotement rapide** | Erreur Critique (Critical Error), intervention requise | Tous            |
+
+## 5. Configuration et Brochage (Pinout)
+
+Chaque module nécessite un câblage spécifique pour ses périphériques. Les broches ont été choisies pour éviter les conflits avec les fonctions de base de l'ESP32.
 
 **Note importante** : Utilisez une carte de développement ESP32 standard (type "ESP32 Dev Module").
 
-### 4.1. Centrale
-
-La Centrale n'a pas besoin de périphériques externes autres que le module LoRa.
+### 5.1. Brochage Commun
 
 - **Module LoRa (RFM95/SX127x)**:
   - `SCK`  -> `GPIO 18`
@@ -61,6 +74,10 @@ La Centrale n'a pas besoin de périphériques externes autres que le module LoRa
   - `NSS`  -> `GPIO 5`
   - `RST`  -> `GPIO 14`
   - `DIO0` -> `GPIO 2`
+- **LEDs de Statut (RGB)**:
+  - `Rouge` -> `GPIO 15`
+  - `Vert`  -> `GPIO 16`
+  - `Bleu`  -> `GPIO 17`
 
 ### 4.2. AquaReserv Pro
 

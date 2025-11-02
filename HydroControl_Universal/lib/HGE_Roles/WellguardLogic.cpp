@@ -3,6 +3,7 @@
 #include <SPI.h>
 #include "Crypto.h"
 #include "WatchdogManager.h"
+#include "LedManager.h"
 
 WellguardLogic* WellguardLogic::instance = nullptr;
 
@@ -139,6 +140,9 @@ void WellguardLogic::Task_Status_Reporter(void *pvParameters) {
 
 void WellguardLogic::onReceive(int packetSize) {
     if (packetSize == 0 || packetSize > LORA_RX_PACKET_MAX_LEN) return;
+
+    ledManager.setState(LORA_RECEIVING);
+
     char packetBuffer[LORA_RX_PACKET_MAX_LEN];
     int len = 0;
     while (LoRa.available()) packetBuffer[len++] = (char)LoRa.read();
@@ -179,6 +183,7 @@ void WellguardLogic::setRelayState(bool newState) {
     // Logique de sécurité : Ne jamais allumer si un défaut matériel est actif.
     if (newState && hardwareFaultActive) {
         Serial.println("WARN: Pump activation inhibited by active hardware fault.");
+        ledManager.setState(WARNING); // Indicate the fault state
         return;
     }
 
@@ -186,17 +191,22 @@ void WellguardLogic::setRelayState(bool newState) {
     digitalWrite(WELLGUARD_RELAY_PIN, relayState ? HIGH : LOW);
     Serial.printf("Relay state set to: %s\n", relayState ? "ON" : "OFF");
 
-    String status;
-    if(hardwareFaultActive) {
-        status = "FAULT";
+    if (hardwareFaultActive) {
+        ledManager.setState(WARNING);
+    } else if (relayState) {
+        ledManager.setState(ACTION_IN_PROGRESS);
     } else {
-        status = relayState ? "ON" : "OFF";
+        ledManager.setState(SYSTEM_OK);
     }
+
+    String status = hardwareFaultActive ? "FAULT" : (relayState ? "ON" : "OFF");
     String statusPacket = LoRaMessage::serializeStatusUpdate(deviceId.c_str(), status.c_str(), LoRa.packetRssi());
     sendLoRaMessage(statusPacket);
 }
 
 void WellguardLogic::sendLoRaMessage(const String& message) {
+    ledManager.setState(LORA_TRANSMITTING);
+
     String encrypted = CryptoManager::encrypt(message);
 
     LoRa.beginPacket();
@@ -205,4 +215,14 @@ void WellguardLogic::sendLoRaMessage(const String& message) {
 
     instance->lastLoRaTransmissionTimestamp = millis();
     Serial.printf("Sent LoRa Packet: %s\n", message.c_str());
+
+    // Restore the LED to its previous state after a short delay
+    vTaskDelay(pdMS_TO_TICKS(500)); // Keep transmit color for 500ms
+    if (instance->hardwareFaultActive) {
+        ledManager.setState(WARNING);
+    } else if (instance->relayState) {
+        ledManager.setState(ACTION_IN_PROGRESS);
+    } else {
+        ledManager.setState(SYSTEM_OK);
+    }
 }

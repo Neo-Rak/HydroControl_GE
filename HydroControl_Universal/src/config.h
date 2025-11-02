@@ -18,6 +18,11 @@
 #define LORA_RST_PIN   14
 #define LORA_DIO0_PIN  2
 
+// LEDs de statut (RGB)
+#define LED_RED_PIN    15
+#define LED_GREEN_PIN  16
+#define LED_BLUE_PIN   17
+
 // -----------------------------------------------------------------
 // Brochage spécifique au rôle AQUA_RESERV_PRO
 // -----------------------------------------------------------------

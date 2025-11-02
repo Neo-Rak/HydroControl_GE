@@ -3,7 +3,8 @@
 #include <SPI.h>
 #include "Crypto.h"
 #include <ArduinoJson.h>
-#include "WatchdogManager.h" // Inclure le gestionnaire de watchdog
+#include "WatchdogManager.h"
+#include "LedManager.h"
 
 AquaReservLogic* AquaReservLogic::instance = nullptr;
 
@@ -99,6 +100,13 @@ void AquaReservLogic::startTasks() {
 
 void AquaReservLogic::triggerPumpCommand(bool command) {
     currentPumpCommand = command;
+
+    if (command) {
+        ledManager.setState(ACTION_IN_PROGRESS);
+    } else {
+        ledManager.setState(SYSTEM_OK);
+    }
+
     if (assignedWellId.isEmpty()) return;
 
     String packet;
@@ -251,6 +259,8 @@ void AquaReservLogic::Task_Status_Reporter(void *pvParameters) {
 void AquaReservLogic::onReceive(int packetSize) {
     if (packetSize == 0) return;
 
+    ledManager.setState(LORA_RECEIVING);
+
     String encryptedPacket = "";
     while (LoRa.available()) {
         encryptedPacket += (char)LoRa.read();
@@ -306,6 +316,8 @@ bool AquaReservLogic::sendReliableCommand(const String& packet) {
 }
 
 void AquaReservLogic::sendLoRaMessage(const String& message) {
+    ledManager.setState(LORA_TRANSMITTING);
+
     String encrypted = CryptoManager::encrypt(message);
     LoRa.beginPacket();
     LoRa.print(encrypted);
@@ -313,4 +325,12 @@ void AquaReservLogic::sendLoRaMessage(const String& message) {
 
     instance->lastLoRaTransmissionTimestamp = millis();
     Serial.printf("Sent LoRa Packet: %s\n", message.c_str());
+
+    // Restore the LED to its previous state after a short delay
+    vTaskDelay(pdMS_TO_TICKS(500)); // Keep transmit color for 500ms
+    if(instance->currentPumpCommand) {
+        ledManager.setState(ACTION_IN_PROGRESS);
+    } else {
+        ledManager.setState(SYSTEM_OK);
+    }
 }
