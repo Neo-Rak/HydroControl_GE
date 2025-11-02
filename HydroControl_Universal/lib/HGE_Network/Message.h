@@ -72,11 +72,12 @@ public:
     }
 
     // --- Sérialisation d'une mise à jour de statut ---
-    static String serializeStatusUpdate(const char* deviceId, const char* status, int rssi) {
+    static String serializeStatusUpdate(const char* deviceId, const char* level, bool pumpState, int rssi) {
         StaticJsonDocument<256> doc;
         doc["type"] = MessageType::STATUS_UPDATE;
         doc["id"] = deviceId;
-        doc["status"] = status;
+        doc["level"] = level;
+        doc["pumpState"] = pumpState;
         doc["rssi"] = rssi;
         String output;
         serializeJson(doc, output);

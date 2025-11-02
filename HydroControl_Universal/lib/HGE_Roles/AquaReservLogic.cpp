@@ -248,7 +248,7 @@ void AquaReservLogic::Task_Status_Reporter(void *pvParameters) {
         else if(self->currentLevel == LEVEL_EMPTY) levelStr = "EMPTY";
         else if(self->currentLevel == LEVEL_ERROR) levelStr = "ERROR";
 
-        String statusPacket = LoRaMessage::serializeStatusUpdate(self->deviceId.c_str(), levelStr, LoRa.packetRssi());
+        String statusPacket = LoRaMessage::serializeStatusUpdate(self->deviceId.c_str(), levelStr, self->currentPumpCommand, LoRa.packetRssi());
         sendLoRaMessage(statusPacket);
     }
 }

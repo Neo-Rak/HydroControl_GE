@@ -227,7 +227,7 @@ void CentraleLogic::Task_SSE_Publisher(void* pvParameters) {
 
 // --- Logic Methods ---
 
-void CentraleLogic::registerOrUpdateNode(const String& id, NodeRole role, const String& status, int rssi) {
+void CentraleLogic::registerOrUpdateNode(const String& id, NodeRole role, const String& status, bool pumpState, int rssi) {
     if (xSemaphoreTake(nodeListMutex_Centrale, portMAX_DELAY) == pdTRUE) {
         int existingNodeIndex = -1;
         for (int i = 0; i < nodeCount; i++) {
@@ -241,6 +241,7 @@ void CentraleLogic::registerOrUpdateNode(const String& id, NodeRole role, const 
             nodeList[existingNodeIndex].lastSeen = millis();
             nodeList[existingNodeIndex].rssi = rssi;
             nodeList[existingNodeIndex].status = status;
+            nodeList[existingNodeIndex].pumpState = pumpState;
             if (role != ROLE_UNKNOWN) nodeList[existingNodeIndex].type = role;
         } else if (nodeCount < MAX_NODES) { // Add new node
             nodeList[nodeCount].id = id;
@@ -249,6 +250,7 @@ void CentraleLogic::registerOrUpdateNode(const String& id, NodeRole role, const 
             nodeList[nodeCount].lastSeen = millis();
             nodeList[nodeCount].rssi = rssi;
             nodeList[nodeCount].status = status;
+            nodeList[nodeCount].pumpState = pumpState;
             nodeList[nodeCount].assignedTo = "";
             nodeCount++;
         }
@@ -314,6 +316,7 @@ String CentraleLogic::getSystemStatusJson() {
             node["type"] = (int)nodeList[i].type;
             node["rssi"] = nodeList[i].rssi;
             node["status"] = nodeList[i].status;
+            node["pumpState"] = nodeList[i].pumpState;
             node["lastSeen"] = nodeList[i].lastSeen;
             node["assignedTo"] = nodeList[i].assignedTo;
         }
@@ -361,10 +364,10 @@ void CentraleLogic::handleLoRaPacket(const String& packet, int rssi) {
 
     switch (type) {
         case DISCOVERY:
-            instance->registerOrUpdateNode(id, (NodeRole)doc["role"].as<int>(), "Discovered", rssi);
+            instance->registerOrUpdateNode(id, (NodeRole)doc["role"].as<int>(), "Discovered", false, rssi);
             break;
         case STATUS_UPDATE:
-            instance->registerOrUpdateNode(id, ROLE_UNKNOWN, doc["status"].as<String>(), rssi);
+            instance->registerOrUpdateNode(id, ROLE_UNKNOWN, doc["level"].as<String>(), doc["pumpState"].as<bool>(), rssi);
             break;
         case REQUEST_PUMP_ON:
         case REQUEST_PUMP_OFF:

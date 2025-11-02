@@ -18,6 +18,7 @@ struct Node {
     NodeRole type;
     long rssi;
     String status;
+    bool pumpState;
     unsigned long lastSeen;
     String assignedTo; // For AquaReserv, stores the Wellguard ID it's assigned to
 };
@@ -38,7 +39,7 @@ private:
     void setupWebServer();
     void startTasks();
 
-    void registerOrUpdateNode(const String& id, NodeRole role, const String& status, int rssi);
+    void registerOrUpdateNode(const String& id, NodeRole role, const String& status, bool pumpState, int rssi);
     void handlePumpRequest(const String& requesterId, MessageType requestType);
     String getSystemStatusJson();
     void saveNodeName(const String& nodeId, const String& nodeName);

@@ -132,7 +132,7 @@ void WellguardLogic::Task_Status_Reporter(void *pvParameters) {
             status = self->relayState ? "ON" : "OFF";
         }
 
-        String statusPacket = LoRaMessage::serializeStatusUpdate(self->deviceId.c_str(), status.c_str(), self->lastCommandRssi);
+        String statusPacket = LoRaMessage::serializeStatusUpdate(self->deviceId.c_str(), status.c_str(), self->relayState, self->lastCommandRssi);
         sendLoRaMessage(statusPacket);
     }
 }
@@ -202,7 +202,7 @@ void WellguardLogic::setRelayState(bool newState) {
     }
 
     String status = hardwareFaultActive ? "FAULT" : (relayState ? "ON" : "OFF");
-    String statusPacket = LoRaMessage::serializeStatusUpdate(deviceId.c_str(), status.c_str(), LoRa.packetRssi());
+    String statusPacket = LoRaMessage::serializeStatusUpdate(deviceId.c_str(), status.c_str(), relayState, LoRa.packetRssi());
     sendLoRaMessage(statusPacket);
 }
 

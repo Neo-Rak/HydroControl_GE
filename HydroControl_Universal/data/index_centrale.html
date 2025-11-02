@@ -26,6 +26,7 @@
                     <th>Nom</th>
                     <th>Type</th>
                     <th>Statut</th>
+                    <th>État Pompe</th>
                     <th>RSSI (dBm)</th>
                     <th>Dernier Contact</th>
                     <th>Assigné à</th>
@@ -51,7 +52,9 @@
 
                 source.addEventListener('error', function(e) {
                     if (e.target.readyState != EventSource.OPEN) {
-                        console.log("SSE Connection closed.");
+                        console.log("SSE Connection closed. Falling back to fetch.");
+                        // Fallback to polling if SSE fails
+                        setTimeout(fetchStatus, 1000);
                     }
                 }, false);
 
@@ -72,6 +75,7 @@
                     <td>${node.name || 'N/A'}</td>
                     <td>${node.type == 2 ? 'AquaReservPro' : (node.type == 3 ? 'WellguardPro' : 'Unknown')}</td>
                     <td>${node.status}</td>
+                    <td>${node.pumpState ? 'ON' : 'OFF'}</td>
                     <td>${node.rssi}</td>
                     <td>${new Date(node.lastSeen).toLocaleString()}</td>
                     <td>${node.assignedTo || 'N/A'}</td>
@@ -79,6 +83,15 @@
                 </tr>`;
                 tableBody.innerHTML += row;
             });
+        }
+
+        function fetchStatus() {
+            fetch('/api/status')
+                .then(response => response.json())
+                .then(data => {
+                    updateTable(data.nodes);
+                })
+                .catch(error => console.error('Error fetching status:', error));
         }
 
         function renameNode(nodeId) {
