@@ -43,7 +43,6 @@ private:
     void handlePumpRequest(const String& requesterId, MessageType requestType);
     String getSystemStatusJson();
     void saveNodeName(const String& nodeId, const String& nodeName);
-    String loadNodeName(const String& nodeId);
 
     // Static members to be accessed by ISR/callbacks
     static CentraleLogic* instance;

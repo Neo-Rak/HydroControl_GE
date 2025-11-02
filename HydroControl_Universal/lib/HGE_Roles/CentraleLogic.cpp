@@ -245,7 +245,7 @@ void CentraleLogic::registerOrUpdateNode(const String& id, NodeRole role, const 
             if (role != ROLE_UNKNOWN) nodeList[existingNodeIndex].type = role;
         } else if (nodeCount < MAX_NODES) { // Add new node
             nodeList[nodeCount].id = id;
-            nodeList[nodeCount].name = loadNodeName(id);
+            nodeList[nodeCount].name = ""; // Initialiser le nom à une chaîne vide
             nodeList[nodeCount].type = role;
             nodeList[nodeCount].lastSeen = millis();
             nodeList[nodeCount].rssi = rssi;
@@ -331,14 +331,6 @@ void CentraleLogic::saveNodeName(const String& nodeId, const String& nodeName) {
     prefs.begin("node-names", false);
     prefs.putString(nodeId.c_str(), nodeName);
     prefs.end();
-}
-
-String CentraleLogic::loadNodeName(const String& nodeId) {
-    Preferences prefs;
-    prefs.begin("node-names", false); // Open in read-write mode to create if not exists
-    String name = prefs.getString(nodeId.c_str(), "");
-    prefs.end();
-    return name;
 }
 
 // --- LoRa Static Methods ---
