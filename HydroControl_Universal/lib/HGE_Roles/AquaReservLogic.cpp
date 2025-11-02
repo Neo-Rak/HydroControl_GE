@@ -56,10 +56,10 @@ void AquaReservLogic::saveOperationalConfig() {
 
 
 void AquaReservLogic::setupHardware() {
-    // Initialisation des broches pour les capteurs de niveau
-    pinMode(AQUA_RESERV_LEVEL_HIGH_PIN, INPUT_PULLUP);
-    pinMode(AQUA_RESERV_LEVEL_LOW_PIN, INPUT_PULLUP);
-    pinMode(AQUA_RESERV_BUTTON_PIN, INPUT_PULLUP);
+    // Configuration des broches pour le rôle AquaReservPro
+    pinMode(ROLE_PIN_1, INPUT_PULLUP); // Capteur de niveau haut
+    pinMode(ROLE_PIN_2, INPUT_PULLUP); // Capteur de niveau bas
+    pinMode(ROLE_PIN_3, INPUT_PULLUP); // Bouton manuel
 }
 
 void AquaReservLogic::setupLoRa() {
@@ -137,8 +137,8 @@ void AquaReservLogic::Task_Sensor_Handler(void *pvParameters) {
     for (;;) {
         WatchdogManager::pet(); // Nourrir le watchdog
         // Lecture des capteurs. Rappel : INPUT_PULLUP, donc LOW = activé.
-        bool highSensorActive = (digitalRead(AQUA_RESERV_LEVEL_HIGH_PIN) == LOW);
-        bool lowSensorActive = (digitalRead(AQUA_RESERV_LEVEL_LOW_PIN) == LOW);
+        bool highSensorActive = (digitalRead(ROLE_PIN_1) == LOW);
+        bool lowSensorActive = (digitalRead(ROLE_PIN_2) == LOW);
 
         LevelState detectedLevel;
 
@@ -206,7 +206,7 @@ void AquaReservLogic::Task_GPIO_Handler(void *pvParameters) {
     const int debounceDelay = 50;
 
     for (;;) {
-        int buttonState = digitalRead(AQUA_RESERV_BUTTON_PIN);
+        int buttonState = digitalRead(ROLE_PIN_3);
         if (buttonState != lastButtonState) {
             lastDebounceTime = millis();
         }

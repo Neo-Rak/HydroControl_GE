@@ -24,24 +24,10 @@
 #define LED_YELLOW_PIN 17
 
 // -----------------------------------------------------------------
-// Brochage spécifique au rôle AQUA_RESERV_PRO
+// Brochage universel pour les rôles
 // -----------------------------------------------------------------
-
-// Capteurs de niveau d'eau (logique INPUT_PULLUP)
-// Le capteur doit connecter la broche au GND lorsqu'il est activé.
-#define AQUA_RESERV_LEVEL_HIGH_PIN 25 // Capteur de niveau haut
-#define AQUA_RESERV_LEVEL_LOW_PIN  26 // Capteur de niveau bas
-
-// Bouton pour le mode manuel (logique INPUT_PULLUP)
-#define AQUA_RESERV_BUTTON_PIN     32
-
-// -----------------------------------------------------------------
-// Brochage spécifique au rôle WELLGUARD_PRO
-// -----------------------------------------------------------------
-
-// Commande du relais de la pompe de puits
-#define WELLGUARD_RELAY_PIN        27
-
-// Entrée pour un défaut matériel externe (ex: pressostat, arrêt d'urgence)
-// Logique INPUT_PULLUP : le capteur doit connecter la broche au GND en cas de défaut.
-#define WELLGUARD_FAULT_PIN        33
+// Ces broches sont utilisées différemment selon le rôle configuré.
+// Voir la documentation pour le câblage exact.
+#define ROLE_PIN_1    25
+#define ROLE_PIN_2    26
+#define ROLE_PIN_3    27

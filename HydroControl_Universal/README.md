@@ -59,44 +59,46 @@ Tous les modules sont équipés d'un système de diagnostic visuel utilisant tro
 | **Rouge, clignotement rapide**        | Erreur Critique (Critical Error)                   |
 | **Toutes éteintes**                   | Module non alimenté ou état OFF                    |
 
-## 5. Configuration et Brochage (Pinout)
+## 5. Brochage Matériel Universel
 
-Chaque module nécessite un câblage spécifique pour ses périphériques. Les broches ont été choisies pour éviter les conflits avec les fonctions de base de l'ESP32.
+Pour simplifier la production et l'installation, tous les modules HydroControl-GE partagent **exactement le même câblage**. Le firmware active les broches nécessaires en fonction du rôle configuré.
 
-**Note importante** : Utilisez une carte de développement ESP32 standard (type "ESP32 Dev Module").
+### 5.1. Brochage Commun (pour tous les modules)
 
-### 5.1. Brochage Commun
+| Périphérique      | Broche ESP32 |
+| ----------------- | ------------ |
+| LoRa `SCK`        | `GPIO 18`    |
+| LoRa `MISO`       | `GPIO 19`    |
+| LoRa `MOSI`       | `GPIO 23`    |
+| LoRa `NSS`        | `GPIO 5`     |
+| LoRa `RST`        | `GPIO 14`    |
+| LoRa `DIO0`       | `GPIO 2`     |
+| LED Rouge         | `GPIO 15`    |
+| LED Verte         | `GPIO 16`    |
+| LED Jaune         | `GPIO 17`    |
 
-- **Module LoRa (RFM95/SX127x)**:
-  - `SCK`  -> `GPIO 18`
-  - `MISO` -> `GPIO 19`
-  - `MOSI` -> `GPIO 23`
-  - `NSS`  -> `GPIO 5`
-  - `RST`  -> `GPIO 14`
-  - `DIO0` -> `GPIO 2`
-- **LEDs de Statut**:
-  - `Rouge`  -> `GPIO 15`
-  - `Verte`  -> `GPIO 16`
-  - `Jaune`  -> `GPIO 17`
+### 5.2. Brochage Spécifique au Rôle
 
-### 4.2. AquaReserv Pro
+Les broches suivantes doivent être câblées en fonction du rôle le plus complexe que le module pourrait avoir à remplir.
 
-- **Module LoRa**: Même brochage que la Centrale.
-- **Capteur de Niveau Haut (flotteur)**:
-  - `Signal` -> `GPIO 25` (configuré en INPUT_PULLUP)
-- **Capteur de Niveau Bas (flotteur)**:
-  - `Signal` -> `GPIO 26` (configuré en INPUT_PULLUP)
-### 4.3. Wellguard Pro
+| Broche      | Rôle : `AquaReserv Pro`        | Rôle : `Wellguard Pro`     | Rôle : `Centrale` |
+| ----------- | ------------------------------ | -------------------------- | ----------------- |
+| **`GPIO 25`** | Capteur Niveau Haut (Entrée)   | Commande Relais (Sortie)   | Non utilisé      |
+| **`GPIO 26`** | Capteur Niveau Bas (Entrée)    | Défaut Matériel (Entrée)   | Non utilisé      |
+| **`GPIO 27`** | Bouton Manuel (Entrée)         | Non utilisé                | Non utilisé      |
 
-- **Module LoRa**: Même brochage que la Centrale.
-- **Commande Relais (pompe de puits)**:
-  - `Signal` -> `GPIO 27`
+### 5.3. Instructions de Câblage
 
-## 5. Schémas de Câblage
+- **Pour `AquaReserv Pro`**:
+  - Connectez les capteurs de niveau haut et bas (logique `INPUT_PULLUP`, l'autre fil à `GND`).
+  - Connectez le bouton manuel (logique `INPUT_PULLUP`, l'autre fil à `GND`).
+- **Pour `Wellguard Pro`**:
+  - Connectez la commande du module relais.
+  - Connectez le capteur de défaut externe (logique `INPUT_PULLUP`, l'autre fil à `GND`).
+- **Pour la `Centrale`**:
+  - Aucun câblage supplémentaire n'est requis.
 
-(Cette section serait idéalement complétée avec des diagrammes, mais voici une description textuelle.)
-
-### 5.1. Câblage Commun (Module LoRa)
+## 6. Schémas de Câblage
 
 ```
 ESP32 DevKit V1      Module LoRa (SX127x)

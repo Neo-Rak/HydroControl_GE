@@ -32,9 +32,10 @@ void WellguardLogic::initialize() {
 }
 
 void WellguardLogic::setupHardware() {
-    pinMode(WELLGUARD_RELAY_PIN, OUTPUT);
-    digitalWrite(WELLGUARD_RELAY_PIN, LOW);
-    pinMode(WELLGUARD_FAULT_PIN, INPUT_PULLUP); // Initialiser la broche de défaut
+    // Configuration des broches pour le rôle WellguardPro
+    pinMode(ROLE_PIN_1, OUTPUT);       // Commande du relais
+    digitalWrite(ROLE_PIN_1, LOW);     // S'assurer que le relais est éteint au démarrage
+    pinMode(ROLE_PIN_2, INPUT_PULLUP); // Entrée de défaut matériel
 }
 
 void WellguardLogic::setupLoRa() {
@@ -96,7 +97,7 @@ void WellguardLogic::Task_Fault_Monitor(void* pvParameters) {
     for(;;) {
         WatchdogManager::pet();
         // Rappel: INPUT_PULLUP, donc LOW signifie que le défaut est actif.
-        bool faultDetected = (digitalRead(WELLGUARD_FAULT_PIN) == LOW);
+        bool faultDetected = (digitalRead(ROLE_PIN_2) == LOW);
 
         if (faultDetected && !self->hardwareFaultActive) {
             // Un nouveau défaut est détecté
@@ -189,7 +190,7 @@ void WellguardLogic::setRelayState(bool newState) {
     }
 
     relayState = newState;
-    digitalWrite(WELLGUARD_RELAY_PIN, relayState ? HIGH : LOW);
+    digitalWrite(ROLE_PIN_1, relayState ? HIGH : LOW);
     Serial.printf("Relay state set to: %s\n", relayState ? "ON" : "OFF");
 
     if (hardwareFaultActive) {
